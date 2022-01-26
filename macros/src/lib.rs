@@ -82,9 +82,6 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     let output = quote!(
 
-    // version of the host-actor api
-    pub const HOST_API_VERSION : u32 = 1;
-
     #[link(wasm_import_module = "wasmbus")]
     extern "C" {
         pub fn __guest_response(ptr: *const u8, len: usize);
