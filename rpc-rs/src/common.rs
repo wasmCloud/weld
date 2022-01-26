@@ -7,7 +7,7 @@ use std::borrow::Cow;
 pub struct Message<'m> {
     /// Message name, usually in the form 'Trait.method'
     pub method: &'m str,
-    /// parameter serialized as a byte array. If the method takes no args, the array will be
+    /// parameter serialized as a byte array. If the method takes no args, the arraya will be
     /// zero length.
     pub arg: Cow<'m, [u8]>,
 }
@@ -37,11 +37,13 @@ pub struct SendOpts {
 }
 
 impl SendOpts {
+    #[must_use]
     pub fn idempotent(mut self, val: bool) -> SendOpts {
         self.idempotent = val;
         self
     }
 
+    #[must_use]
     pub fn read_only(mut self, val: bool) -> SendOpts {
         self.read_only = val;
         self
