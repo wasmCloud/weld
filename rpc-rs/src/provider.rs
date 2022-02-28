@@ -807,7 +807,13 @@ impl<'send> ProviderTransport<'send> {
         Self {
             bridge,
             ld,
-            timeout: StdMutex::new(timeout.unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)),
+            timeout: StdMutex::new(timeout.unwrap_or_else(|| {
+                bridge
+                    .host_data
+                    .default_rpc_timeout_ms
+                    .map(|t| Duration::from_millis(t as u64))
+                    .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
+            })),
         }
     }
 }
@@ -828,7 +834,11 @@ impl<'send> Transport for ProviderTransport<'send> {
             } else {
                 // if lock is poisioned
                 warn!("rpc timeout mutex error - using default value");
-                DEFAULT_RPC_TIMEOUT_MILLIS
+                self.bridge
+                    .host_data
+                    .default_rpc_timeout_ms
+                    .map(|t| Duration::from_millis(t as u64))
+                    .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
             }
         };
         self.bridge
