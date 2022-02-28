@@ -1,13 +1,15 @@
 //! utilities for model validation
 //!
 //!
-use atelier_core::model::shapes::{
-    AppliedTraits, ListOrSet, Operation, Service, Simple, StructureOrUnion,
+use atelier_core::model::{
+    shapes::{AppliedTraits, ListOrSet, Operation, Service, Simple, StructureOrUnion},
+    visitor::{walk_model, ModelVisitor},
+    Model, ShapeID,
 };
-use atelier_core::model::visitor::{walk_model, ModelVisitor};
-use atelier_core::model::{Model, ShapeID};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 const MAX_DEPTH: usize = 8;
 
@@ -224,9 +226,11 @@ impl Node {
             typ: NodeType::Unknown,
         }
     }
+
     fn add_parent(&mut self, parent: ShapeID) {
         self.parents.insert(parent);
     }
+
     fn add_child(&mut self, child: ShapeID) {
         self.children.insert(child);
     }
