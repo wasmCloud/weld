@@ -291,6 +291,7 @@ pub fn decode_health_check_response(
 }
 /// initialization data for a capability provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct HostData {
     #[serde(default)]
     pub host_id: String,
@@ -319,6 +320,9 @@ pub struct HostData {
     /// without an actor context
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_json: Option<String>,
+    /// Optional. Default RPC timeout in milliseconds. Default = 2000
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_rpc_timeout_ms: Option<u32>,
 }
 
 // Encode HostData as CBOR and append to output stream
@@ -327,7 +331,7 @@ pub fn encode_host_data<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &HostData,
 ) -> RpcResult<()> {
-    e.array(13)?;
+    e.array(14)?;
     e.str(&val.host_id)?;
     e.str(&val.lattice_rpc_prefix)?;
     e.str(&val.link_name)?;
@@ -342,6 +346,11 @@ pub fn encode_host_data<W: crate::cbor::Write>(
     encode_cluster_issuers(e, &val.cluster_issuers)?;
     if let Some(val) = val.config_json.as_ref() {
         e.str(val)?;
+    } else {
+        e.null()?;
+    }
+    if let Some(val) = val.default_rpc_timeout_ms.as_ref() {
+        e.u32(*val)?;
     } else {
         e.null()?;
     }
@@ -365,6 +374,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
         let mut link_definitions: Option<ActorLinks> = None;
         let mut cluster_issuers: Option<ClusterIssuers> = None;
         let mut config_json: Option<Option<String>> = Some(None);
+        let mut default_rpc_timeout_ms: Option<Option<u32>> = Some(None);
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -418,6 +428,14 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             Some(Some(d.str()?.to_string()))
                         }
                     }
+                    13 => {
+                        default_rpc_timeout_ms = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u32()?))
+                        }
+                    }
 
                     _ => d.skip()?,
                 }
@@ -463,6 +481,14 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             Some(None)
                         } else {
                             Some(Some(d.str()?.to_string()))
+                        }
+                    }
+                    "defaultRpcTimeoutMs" => {
+                        default_rpc_timeout_ms = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u32()?))
                         }
                     }
                     _ => d.skip()?,
@@ -566,6 +592,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                 ));
             },
             config_json: config_json.unwrap(),
+            default_rpc_timeout_ms: default_rpc_timeout_ms.unwrap(),
         }
     };
     Ok(__result)
