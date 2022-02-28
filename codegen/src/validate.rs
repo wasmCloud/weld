@@ -254,8 +254,12 @@ pub(crate) fn check_cbor_dependencies(model: &Model) -> Result<(), String> {
             let node = tree.get(service_id).unwrap();
             if let Some(reason) = tree.has_cbor_only(node, 0) {
                 return Err(format!(
-                    "Service {}.{} must be declared @wasmbus{{protocol: \"2\"}} due to a dependency on {}",
-                    service_id.namespace(), service_id.shape_name(), reason));
+                    "Service {}.{} must be declared @wasmbus{{protocol: \"2\"}} due to a \
+                     dependency on {}",
+                    service_id.namespace(),
+                    service_id.shape_name(),
+                    reason
+                ));
             }
         }
     }
