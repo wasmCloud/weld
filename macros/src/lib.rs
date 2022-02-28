@@ -195,11 +195,11 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
         impl MessageDispatch for #ident {
-            async fn dispatch(
-                &self,
-                ctx: &Context,
-                message: Message<'_>,
-            ) -> Result<Message<'_>, RpcError> {
+            async fn dispatch<'disp,'ctx,'msg>(
+                &'disp self,
+                ctx: &'ctx Context,
+                message: Message<'msg>,
+            ) -> Result<Message<'msg>, RpcError> {
                 let (trait_name, trait_method) = message
                     .method
                     .rsplit_once('.')
