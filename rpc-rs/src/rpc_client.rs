@@ -16,7 +16,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::task::JoinHandle;
 
 pub(crate) const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
 /// Amount of time to add to rpc timeout if chunkifying
@@ -288,35 +287,23 @@ impl RpcClient {
         };
         let nats_body = crate::common::serialize(&invocation)?;
 
-        let chunkify_join: Option<JoinHandle<RpcResult<()>>> = {
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "chunkify")] {
-            if let Some(body) = body
-            {
-                let inv_id = invocation.id.clone();
-                debug!("chunkifying inv {} size {}", &inv_id, len);
-                // start chunking thread
-                let lattice = self.lattice_prefix().to_string();
-                Some(tokio::task::spawn_blocking(move || {
-                    let ce = chunkify_endpoint(None, lattice)?;
-                    ce.chunkify(&inv_id, &mut body.as_slice())
-                }))
-            } else {
-                None
-            }
-
-                    } else {
-                       None
-                    }
-                }
-        };
-        // I tried starting the send to ObjectStore in background thread,
-        // and then send the rpc, but if the objectstore hasn't completed,
-        // the recipient gets a missing object error,
-        // so we need to flush this first
-        if let Some(join) = chunkify_join {
-            let _ = join.await.map_err(|e| RpcError::Other(e.to_string()))?;
-            debug!("writing to ObjectStore should be complete");
+        #[cfg(feature = "chunkify")]
+        if let Some(body) = body {
+            let inv_id = invocation.id.clone();
+            debug!("chunkifying inv {} size {}", &inv_id, len);
+            // start chunking thread
+            let lattice = self.lattice_prefix().to_string();
+            tokio::task::spawn_blocking(move || {
+                let ce = chunkify_endpoint(None, lattice)?;
+                ce.chunkify(&inv_id, &mut body.as_slice())
+            })
+            // I tried starting the send to ObjectStore in background thread,
+            // and then send the rpc, but if the objectstore hasn't completed,
+            // the recipient gets a missing object error,
+            // so we need to flush this first
+            .await
+            // any errors sending chunks will cause send to fail with RpcError::Nats
+            .map_err(|e| RpcError::Other(e.to_string()))??;
         }
 
         let timeout = if chunkify {
@@ -329,13 +316,7 @@ impl RpcClient {
         if expect_response {
             let payload = if let Some(timeout) = timeout {
                 // if we expect a response before timeout, finish sending all chunks, then wait for response
-                match tokio::time::timeout(
-                    timeout,
-                    //self.request_join(&topic, &nats_body, chunkify_join),
-                    self.request(&topic, &nats_body),
-                )
-                .await
-                {
+                match tokio::time::timeout(timeout, self.request(&topic, &nats_body)).await {
                     Ok(Ok(result)) => Ok(result),
                     Ok(Err(rpc_err)) => Err(RpcError::Nats(format!(
                         "rpc send error: {}: {}",
@@ -394,19 +375,6 @@ impl RpcClient {
                 .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
             Ok(Vec::new())
         }
-    }
-
-    /// ensure that chunkified request has been completely sent, then wait for response
-    pub async fn request_join(
-        &self,
-        subject: &str,
-        data: &[u8],
-        join: Option<JoinHandle<RpcResult<()>>>,
-    ) -> RpcResult<Vec<u8>> {
-        if let Some(join) = join {
-            let _ = join.await.map_err(|e| RpcError::Other(e.to_string()))?;
-        }
-        self.request(subject, data).await
     }
 
     /// Send a nats message and wait for the response.
