@@ -7,12 +7,15 @@
 //!
 #![cfg(not(target_arch = "wasm32"))]
 
-use log::{Level, Metadata, Record};
-use once_cell::sync::OnceCell;
 use std::{
     fmt,
+    io::Write,
+    str::FromStr,
     sync::atomic::{AtomicUsize, Ordering},
 };
+
+use log::{Level, Metadata, Record};
+use once_cell::sync::OnceCell;
 
 // Number of log messages that can be queued before the sender is blocked.
 // There is a dedicated log thread  pulling from the queue so this number should
@@ -121,7 +124,6 @@ pub fn init_logger() -> Result<Receiver, String> {
     ) {
         Err(format!("logger init error: {}", e))
     } else {
-        use std::str::FromStr as _;
         let mut detail_level = log::LevelFilter::Info;
         if let Ok(level) = std::env::var("RUST_LOG") {
             let level = if let Some((left, _)) = level.split_once(',') {
@@ -160,8 +162,6 @@ pub fn stop_receiver() {
 /// service), they should not call init_receiver, but instead create
 /// their own function to handle LogRec events from the channel.
 pub fn init_receiver(log_rx: Receiver) {
-    use std::io::Write;
-
     // this works with either a std::thread or a tokio::task::spawn_blocking
     let _join = std::thread::spawn(move || {
         while let Ok(log_rec) = log_rx.recv() {
