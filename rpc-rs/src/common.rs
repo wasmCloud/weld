@@ -1,7 +1,7 @@
 use crate::error::{RpcError, RpcResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, collections::HashMap, fmt};
 
 /// A wasmcloud message
 #[derive(Debug)]
@@ -242,5 +242,328 @@ impl<T: Transport + Sync + Send> AnySender<T> {
         let result: Out =
             crate::minicbor::decode(&resp).map_err(|e| RpcError::Deser(e.to_string()))?;
         Ok(result)
+    }
+}
+
+pub type Unit = ();
+
+/// Document Type
+///
+/// Document types represents protocol-agnostic open content that is accessed like JSON data.
+/// Open content is useful for modeling unstructured data that has no schema, data that can't be
+/// modeled using rigid types, or data that has a schema that evolves outside of the purview of a model.
+/// The serialization format of a document is an implementation detail of a protocol.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Document<'v> {
+    /// JSON object
+    Object(std::collections::HashMap<String, Document<'v>>),
+    /// Blob
+    Blob(Cow<'v, [u8]>),
+    /// JSON array
+    Array(Vec<Document<'v>>),
+    /// JSON number
+    Number(Number),
+    /// JSON string
+    String(Cow<'v, str>),
+    /// JSON boolean
+    Bool(bool),
+    /// JSON null
+    Null,
+}
+
+impl<'v> Document<'v> {
+    /// Returns the map, if Document is an Object, otherwise None
+    pub fn to_object(self) -> Option<std::collections::HashMap<String, Document<'v>>> {
+        if let Document::Object(val) = self {
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// Returns reference to the map, if Document is an Object, otherwise None
+    pub fn as_object(&self) -> Option<&std::collections::HashMap<String, Document<'v>>> {
+        if let Document::Object(val) = self {
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// returns true if the Document is an object
+    pub fn is_object(&self) -> bool {
+        self.as_object().is_some()
+    }
+
+    /// Returns the blob, if Document is an Blob, otherwise None
+    pub fn as_blob(&self) -> Option<&Cow<'v, [u8]>> {
+        if let Document::Blob(val) = self {
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the blob, if Document is an Blob, otherwise None
+    pub fn to_blob(self) -> Option<Cow<'v, [u8]>> {
+        if let Document::Blob(val) = self {
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// returns true if the Document is a blob (byte array)
+    pub fn is_blob(&self) -> bool {
+        self.as_blob().is_some()
+    }
+
+    /// Returns the array, if Document is an Array, otherwise None
+    pub fn as_array(&self) -> Option<&Vec<Document<'v>>> {
+        if let Document::Array(val) = self {
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the array, if Document is an Array, otherwise None
+    pub fn to_array(self) -> Option<Vec<Document<'v>>> {
+        if let Document::Array(val) = self {
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// returns true if the Document is an array
+    pub fn is_array(&self) -> bool {
+        self.as_array().is_some()
+    }
+
+    /// Returns the Number, if Document is a Number, otherwise None
+    pub fn as_number(&self) -> Option<Number> {
+        if let Document::Number(val) = self {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_number(self) -> Option<Number> {
+        self.as_number()
+    }
+
+    /// returns true if the Document is a number (signed/unsigned int or float)
+    pub fn is_number(&self) -> bool {
+        self.as_number().is_some()
+    }
+
+    /// Returns the positive int, if Document is a positive int, otherwise None
+    pub fn as_pos_int(&self) -> Option<u64> {
+        if let Document::Number(Number::PosInt(val)) = self {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_pos_int(self) -> Option<u64> {
+        self.as_pos_int()
+    }
+
+    /// returns true if the Document is a positive integer
+    pub fn is_pos_int(&self) -> bool {
+        self.as_pos_int().is_some()
+    }
+
+    /// Returns the signed int, if Document is a signed int, otherwise None
+    pub fn as_int(&self) -> Option<i64> {
+        if let Document::Number(Number::NegInt(val)) = self {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_int(self) -> Option<i64> {
+        self.as_int()
+    }
+
+    /// returns true if the Document is a signed integer
+    pub fn is_int(&self) -> bool {
+        self.as_int().is_some()
+    }
+
+    /// Returns the float value, if Document is a float value, otherwise None
+    pub fn as_float(&self) -> Option<f64> {
+        if let Document::Number(Number::Float(val)) = self {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_float(self) -> Option<f64> {
+        (&self).as_float()
+    }
+
+    /// returns true if the Document is a float
+    pub fn is_float(&self) -> bool {
+        self.as_float().is_some()
+    }
+
+    /// Returns the bool value, if Document is a bool value, otherwise None
+    pub fn as_bool(&self) -> Option<bool> {
+        if let Document::Bool(val) = self {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_bool(self) -> Option<bool> {
+        self.as_bool()
+    }
+
+    /// returns true if the Document is a boolean
+    pub fn is_bool(&self) -> bool {
+        self.as_bool().is_some()
+    }
+
+    /// Returns borrowed str, if Document is a string value, otherwise None
+    pub fn as_str(&self) -> Option<&str> {
+        if let Document::String(val) = self {
+            Some(val.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// returns owned String, if Document is a String value
+    pub fn to_string(self) -> Option<String> {
+        if let Document::String(val) = self {
+            Some(val.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// returns true if the Document is a string type
+    pub fn is_str(&self) -> bool {
+        self.as_str().is_some()
+    }
+
+    /// returns true if the Document is null
+    pub fn is_null(&self) -> bool {
+        matches!(self, Document::Null)
+    }
+
+    pub fn from_null() -> Self {
+        Document::Null
+    }
+}
+
+/// A number type that implements Javascript / JSON semantics, modeled on serde_json:
+/// <https://docs.serde.rs/src/serde_json/number.rs.html#20-22>
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Number {
+    /// Unsigned 64-bit integer value
+    PosInt(u64),
+    /// Signed 64-bit integer value
+    NegInt(i64),
+    /// 64-bit floating-point value
+    Float(f64),
+}
+
+macro_rules! to_num_fn {
+    ($name:ident, $typ:ident) => {
+        /// Converts to a `$typ`. This conversion may be lossy.
+        pub fn $name(self) -> $typ {
+            match self {
+                Number::PosInt(val) => val as $typ,
+                Number::NegInt(val) => val as $typ,
+                Number::Float(val) => val as $typ,
+            }
+        }
+    };
+}
+
+impl Number {
+    to_num_fn!(to_f32, f32);
+
+    to_num_fn!(to_f64, f64);
+
+    to_num_fn!(to_i8, i8);
+
+    to_num_fn!(to_i16, i16);
+
+    to_num_fn!(to_i32, i32);
+
+    to_num_fn!(to_i64, i64);
+
+    to_num_fn!(to_u8, u8);
+
+    to_num_fn!(to_u16, u16);
+
+    to_num_fn!(to_u32, u32);
+
+    to_num_fn!(to_u64, u64);
+}
+
+macro_rules! from_num_fn {
+    ($typ:ident, $nt:ident) => {
+        impl<'v> From<$typ> for Document<'v> {
+            fn from(val: $typ) -> Document<'v> {
+                Document::Number(Number::$nt(val.into()))
+            }
+        }
+    };
+}
+
+from_num_fn!(u64, PosInt);
+from_num_fn!(u32, PosInt);
+from_num_fn!(u16, PosInt);
+from_num_fn!(u8, PosInt);
+from_num_fn!(i64, NegInt);
+from_num_fn!(i32, NegInt);
+from_num_fn!(i16, NegInt);
+from_num_fn!(i8, NegInt);
+from_num_fn!(f64, Float);
+from_num_fn!(f32, Float);
+
+impl<'v> From<std::collections::HashMap<String, Document<'v>>> for Document<'v> {
+    fn from(val: HashMap<String, Document<'v>>) -> Self {
+        Document::Object(val)
+    }
+}
+
+impl<'v> From<Vec<u8>> for Document<'v> {
+    fn from(val: Vec<u8>) -> Self {
+        Document::Blob(Cow::Owned(val))
+    }
+}
+
+impl<'v> From<&'v [u8]> for Document<'v> {
+    fn from(val: &'v [u8]) -> Self {
+        Document::Blob(Cow::Borrowed(val))
+    }
+}
+
+impl<'v> From<Vec<Document<'v>>> for Document<'v> {
+    fn from(val: Vec<Document<'v>>) -> Self {
+        Document::Array(val)
+    }
+}
+
+impl<'v> From<String> for Document<'v> {
+    fn from(val: String) -> Self {
+        Document::String(Cow::Owned(val))
+    }
+}
+
+impl<'v> From<&'v str> for Document<'v> {
+    fn from(val: &'v str) -> Self {
+        Document::String(Cow::Borrowed(val))
     }
 }
