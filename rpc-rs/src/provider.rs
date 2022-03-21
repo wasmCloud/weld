@@ -337,124 +337,128 @@ impl HostBridge {
             .map_err(|e| RpcError::Nats(e.to_string()))?;
         self.add_subscription(sub.clone()).await;
         let this = self.clone();
-        tokio::spawn(
-            async move {
-                while let Some(msg) = sub.next().await {
-                    match deserialize::<Invocation>(&msg.data) {
-                        Ok(mut inv) => {
-                            match this.dechunk_validate(&mut inv).await {
-                                Ok(()) => {
-                                    let provider = provider.clone();
-                                    let rpc_client = this.rpc_client().clone();
-                                    tokio::task::spawn(
-                                        async move {
-                                            tracing::span::Span::current().record(
-                                                "operation",
-                                                &tracing::field::display(&inv.operation),
-                                            );
-                                            tracing::span::Span::current().record(
-                                                "public_key",
-                                                &tracing::field::display(&inv.origin.public_key),
-                                            );
-                                            trace!("Dispatching RPC invocation");
-                                            let response = match provider
-                                                .dispatch(
-                                                    &Context {
-                                                        actor: Some(inv.origin.public_key.clone()),
-                                                        ..Default::default()
-                                                    },
-                                                    Message {
-                                                        method: &inv.operation,
-                                                        arg: Cow::from(inv.msg),
-                                                    },
-                                                )
-                                                .await
-                                            {
-                                                Ok(msg) => InvocationResponse {
-                                                    invocation_id: inv.id,
-                                                    msg: msg.arg.to_vec(),
+        tokio::spawn(async move {
+            while let Some(msg) = sub.next().await {
+                let span = tracing::trace_span!("subscribe_rpc", %rpc_topic);
+                let _enter = span.enter();
+                match deserialize::<Invocation>(&msg.data) {
+                    Ok(mut inv) => {
+                        match this.dechunk_validate(&mut inv).in_current_span().await {
+                            Ok(()) => {
+                                let provider = provider.clone();
+                                let rpc_client = this.rpc_client().clone();
+                                // NOTE: This should just spawn with its own span as we aren't
+                                // awaiting anything here. If for some reason there are some funky
+                                // traces, we can try manually exiting the span here
+                                tokio::task::spawn(
+                                    async move {
+                                        tracing::span::Span::current().record(
+                                            "operation",
+                                            &tracing::field::display(&inv.operation),
+                                        );
+                                        tracing::span::Span::current().record(
+                                            "public_key",
+                                            &tracing::field::display(&inv.origin.public_key),
+                                        );
+                                        trace!("Dispatching RPC invocation");
+                                        let response = match provider
+                                            .dispatch(
+                                                &Context {
+                                                    actor: Some(inv.origin.public_key.clone()),
                                                     ..Default::default()
                                                 },
-                                                Err(e) => {
-                                                    error!(
-                                                        error = %e,
-                                                        "RPC invocation failed",
-                                                    );
-                                                    InvocationResponse {
-                                                        invocation_id: inv.id,
-                                                        error: Some(e.to_string()),
-                                                        ..Default::default()
-                                                    }
-                                                }
-                                            };
-                                            if let Some(reply_to) = msg.reply {
-                                                // Errors are published from inside the function, safe to ignore Result
-                                                let _ = publish_invocation_response(
-                                                    &rpc_client,
-                                                    reply_to,
-                                                    response,
-                                                )
-                                                .await;
-                                            }
-                                        }
-                                        .instrument(
-                                            tracing::error_span!(
-                                                "invocation_dispatch",
-                                                operation = tracing::field::Empty,
-                                                public_key = tracing::field::Empty
-                                            ),
-                                        ),
-                                    );
-                                }
-                                Err(s) => {
-                                    error!(
-                                        operation = %inv.operation,
-                                        public_key = %inv.origin.public_key,
-                                        invocation_id = %inv.id,
-                                        host_id = %inv.host_id,
-                                        error = %s,
-                                        "Invocation validation failure"
-                                    );
-
-                                    if let Some(reply_to) = msg.reply {
-                                        // Errors are published from inside the function, safe to ignore Result
-                                        let _ = publish_invocation_response(
-                                            this.rpc_client(),
-                                            reply_to,
-                                            InvocationResponse {
+                                                Message {
+                                                    method: &inv.operation,
+                                                    arg: Cow::from(inv.msg),
+                                                },
+                                            )
+                                            .await
+                                        {
+                                            Ok(msg) => InvocationResponse {
                                                 invocation_id: inv.id,
-                                                error: Some(s.to_string()),
+                                                msg: msg.arg.to_vec(),
                                                 ..Default::default()
                                             },
-                                        )
-                                        .await;
+                                            Err(e) => {
+                                                error!(
+                                                    error = %e,
+                                                    "RPC invocation failed",
+                                                );
+                                                InvocationResponse {
+                                                    invocation_id: inv.id,
+                                                    error: Some(e.to_string()),
+                                                    ..Default::default()
+                                                }
+                                            }
+                                        };
+                                        if let Some(reply_to) = msg.reply {
+                                            // Errors are published from inside the function, safe to ignore Result
+                                            let _ = publish_invocation_response(
+                                                &rpc_client,
+                                                reply_to,
+                                                response,
+                                            )
+                                            .await;
+                                        }
                                     }
+                                    .instrument(
+                                        tracing::error_span!(
+                                            "invocation_dispatch",
+                                            operation = tracing::field::Empty,
+                                            public_key = tracing::field::Empty
+                                        ),
+                                    ),
+                                );
+                            }
+                            Err(s) => {
+                                error!(
+                                    operation = %inv.operation,
+                                    public_key = %inv.origin.public_key,
+                                    invocation_id = %inv.id,
+                                    host_id = %inv.host_id,
+                                    error = %s,
+                                    "Invocation validation failure"
+                                );
+
+                                if let Some(reply_to) = msg.reply {
+                                    // Errors are published from inside the function, safe to ignore Result
+                                    let _ = publish_invocation_response(
+                                        this.rpc_client(),
+                                        reply_to,
+                                        InvocationResponse {
+                                            invocation_id: inv.id,
+                                            error: Some(s.to_string()),
+                                            ..Default::default()
+                                        },
+                                    )
+                                    .in_current_span()
+                                    .await;
                                 }
                             }
                         }
-                        Err(e) => {
-                            error!(error = %e, "Invocation deserialization failure");
-                            if let Some(reply_to) = msg.reply {
-                                if let Err(e) = publish_invocation_response(
-                                    this.rpc_client(),
-                                    reply_to,
-                                    InvocationResponse {
-                                        invocation_id: "invalid".to_string(),
-                                        error: Some(format!("Corrupt invocation: {}", e)),
-                                        ..Default::default()
-                                    },
-                                )
-                                .await
-                                {
-                                    error!(error = %e, "error when replying to rpc");
-                                }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Invocation deserialization failure");
+                        if let Some(reply_to) = msg.reply {
+                            if let Err(e) = publish_invocation_response(
+                                this.rpc_client(),
+                                reply_to,
+                                InvocationResponse {
+                                    invocation_id: "invalid".to_string(),
+                                    error: Some(format!("Corrupt invocation: {}", e)),
+                                    ..Default::default()
+                                },
+                            )
+                            .in_current_span()
+                            .await
+                            {
+                                error!(error = %e, "error when replying to rpc");
                             }
                         }
                     }
                 }
             }
-            .instrument(tracing::trace_span!("subscribe_rpc", %rpc_topic)),
-        );
+        });
         Ok(())
     }
 
@@ -620,41 +624,38 @@ impl HostBridge {
         self.add_subscription(sub.clone()).await;
         //let provider = provider.clone();
         let (this, provider) = (self.clone(), provider.clone());
-        tokio::spawn(
-            async move {
-                // TODO(ss): do we need to pin it with stream() before iterating?
-                while let Some(msg) = sub.next().await {
-                    if let Some(ld) = this.parse_msg::<LinkDefinition>(&msg, "link.put") {
-                        tracing::span::Span::current()
-                            .record("actor_id", &tracing::field::display(&ld.actor_id));
-                        tracing::span::Span::current()
-                            .record("provider_id", &tracing::field::display(&ld.provider_id));
-                        if this.is_linked(&ld.actor_id).await {
-                            warn!("Ignoring duplicate link put");
-                        } else {
-                            info!("Linking actor with provider");
-                            match provider.put_link(&ld).await {
-                                Ok(true) => {
-                                    this.put_link(ld).await;
-                                }
-                                Ok(false) => {
-                                    // authorization failed or parameters were invalid
-                                    warn!("put_link denied");
-                                }
-                                Err(e) => {
-                                    error!(error = %e, "put_link failed");
-                                }
+        tokio::spawn(async move {
+            // TODO(ss): do we need to pin it with stream() before iterating?
+            while let Some(msg) = sub.next().await {
+                let span = tracing::error_span!(
+                    "subscribe_link_put",
+                    actor_id = tracing::field::Empty,
+                    provider_id = tracing::field::Empty
+                );
+                let _enter = span.enter();
+                if let Some(ld) = this.parse_msg::<LinkDefinition>(&msg, "link.put") {
+                    span.record("actor_id", &tracing::field::display(&ld.actor_id));
+                    span.record("provider_id", &tracing::field::display(&ld.provider_id));
+                    if this.is_linked(&ld.actor_id).in_current_span().await {
+                        warn!("Ignoring duplicate link put");
+                    } else {
+                        info!("Linking actor with provider");
+                        match provider.put_link(&ld).in_current_span().await {
+                            Ok(true) => {
+                                this.put_link(ld).in_current_span().await;
+                            }
+                            Ok(false) => {
+                                // authorization failed or parameters were invalid
+                                warn!("put_link denied");
+                            }
+                            Err(e) => {
+                                error!(error = %e, "put_link failed");
                             }
                         }
                     }
                 }
             }
-            .instrument(tracing::error_span!(
-                "subscribe_link_put",
-                actor_id = tracing::field::Empty,
-                provider_id = tracing::field::Empty
-            )),
-        );
+        });
         Ok(())
     }
 
@@ -677,18 +678,17 @@ impl HostBridge {
             .map_err(|e| RpcError::Nats(e.to_string()))?;
         self.add_subscription(sub.clone()).await;
         let (this, provider) = (self.clone(), provider.clone());
-        tokio::spawn(
-            async move {
-                while let Some(msg) = sub.next().await {
-                    if let Some(ld) = &this.parse_msg::<LinkDefinition>(&msg, "link.del") {
-                        this.delete_link(&ld.actor_id).await;
-                        // notify provider that link is deleted
-                        provider.delete_link(&ld.actor_id).await;
-                    }
+        tokio::spawn(async move {
+            while let Some(msg) = sub.next().await {
+                let span = tracing::trace_span!("subscribe_link_del", topic = %link_del_topic);
+                let _enter = span.enter();
+                if let Some(ld) = &this.parse_msg::<LinkDefinition>(&msg, "link.del") {
+                    this.delete_link(&ld.actor_id).in_current_span().await;
+                    // notify provider that link is deleted
+                    provider.delete_link(&ld.actor_id).in_current_span().await;
                 }
             }
-            .instrument(tracing::trace_span!("subscribe_link_del", topic = %link_del_topic)),
-        );
+        });
         Ok(())
     }
 
@@ -710,43 +710,40 @@ impl HostBridge {
             .map_err(|e| RpcError::Nats(e.to_string()))?;
         self.add_subscription(sub.clone()).await;
         let this = self.clone();
-        tokio::spawn(
-            async move {
-                while let Some(msg) = sub.next().await {
-                    // placeholder arg
-                    let arg = HealthCheckRequest {};
-                    let resp = match provider.health_request(&arg).await {
-                        Ok(resp) => resp,
-                        Err(e) => {
-                            error!(error = %e, "error generating health check response");
-                            HealthCheckResponse {
-                                healthy: false,
-                                message: Some(e.to_string()),
+        tokio::spawn(async move {
+            while let Some(msg) = sub.next().await {
+                // placeholder arg
+                let arg = HealthCheckRequest {};
+                let resp = match provider.health_request(&arg).await {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(error = %e, "error generating health check response");
+                        HealthCheckResponse {
+                            healthy: false,
+                            message: Some(e.to_string()),
+                        }
+                    }
+                };
+                let buf = if this.host_data.is_test() {
+                    Ok(serde_json::to_vec(&resp).unwrap())
+                } else {
+                    serialize(&resp)
+                };
+                match buf {
+                    Ok(t) => {
+                        if let Some(reply_to) = msg.reply.as_ref() {
+                            if let Err(e) = this.rpc_client().publish(reply_to, &t).await {
+                                error!(error = %e, "failed sending health check response");
                             }
                         }
-                    };
-                    let buf = if this.host_data.is_test() {
-                        Ok(serde_json::to_vec(&resp).unwrap())
-                    } else {
-                        serialize(&resp)
-                    };
-                    match buf {
-                        Ok(t) => {
-                            if let Some(reply_to) = msg.reply.as_ref() {
-                                if let Err(e) = this.rpc_client().publish(reply_to, &t).await {
-                                    error!(error = %e, "failed sending health check response");
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            // extremely unlikely that InvocationResponse would fail to serialize
-                            error!(error = %e, "failed serializing HealthCheckResponse");
-                        }
+                    }
+                    Err(e) => {
+                        // extremely unlikely that InvocationResponse would fail to serialize
+                        error!(error = %e, "failed serializing HealthCheckResponse");
                     }
                 }
             }
-            .instrument(tracing::trace_span!("subscribe_health", %topic)),
-        );
+        });
         Ok(())
     }
 }

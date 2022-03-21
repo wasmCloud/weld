@@ -9,7 +9,7 @@ use std::{
 use ring::digest::{Context, SHA256};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, instrument, trace};
 
 #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
 use crate::chunkify::chunkify_endpoint;
@@ -230,6 +230,7 @@ impl RpcClient {
     }
 
     /// request or publish an rpc invocation
+    #[instrument(level = "debug", skip(self, origin, target, message), fields(issuer = tracing::field::Empty, origin_url = tracing::field::Empty, subject = tracing::field::Empty, target_url = tracing::field::Empty, method = tracing::field::Empty))]
     async fn inner_rpc<Target>(
         &self,
         origin: WasmCloudEntity,
@@ -245,8 +246,19 @@ impl RpcClient {
         let origin_url = origin.url();
         let subject = make_uuid();
         let issuer = &self.key.public_key();
-        let target_url = format!("{}/{}", target.url(), &message.method);
-        debug!(%target_url, "rpc_client sending");
+        let raw_target_url = target.url();
+        let target_url = format!("{}/{}", raw_target_url, &message.method);
+
+        // Record all of the fields on the span. To avoid extra allocations, we are only going to
+        // record here after we generate/derive the values
+        let current_span = tracing::span::Span::current();
+        current_span.record("issuer", &tracing::field::display(issuer));
+        current_span.record("origin_url", &tracing::field::display(&origin_url));
+        current_span.record("subject", &tracing::field::display(&subject));
+        current_span.record("target_url", &tracing::field::display(&raw_target_url));
+        current_span.record("method", &tracing::field::display(message.method));
+
+        debug!("rpc_client sending");
         let claims = wascap::prelude::Claims::<wascap::prelude::Invocation>::new(
             issuer.clone(),
             subject.clone(),
@@ -313,7 +325,7 @@ impl RpcClient {
         } else {
             timeout
         };
-        trace!(%target_url, "rpc send");
+        trace!("rpc send");
 
         if expect_response {
             let payload = if let Some(timeout) = timeout {
@@ -325,7 +337,7 @@ impl RpcClient {
                         target_url, rpc_err
                     ))),
                     Err(timeout_err) => {
-                        error!(%target_url, error = %timeout_err, "rpc timeout: sending to target");
+                        error!(error = %timeout_err, "rpc timeout: sending to target");
                         Err(RpcError::Timeout(format!(
                             "sending to {}: {}",
                             &target_url, timeout_err
@@ -362,12 +374,12 @@ impl RpcClient {
                     };
                     #[cfg(not(feature = "chunkify"))]
                     let msg = inv_response.msg;
-                    trace!(%target_url, "rpc ok response");
+                    trace!("rpc ok response");
                     Ok(msg)
                 }
                 Some(err) => {
                     // if error is Some(_), we must ignore the msg field
-                    error!(%target_url, error = %err, "rpc error response");
+                    error!(error = %err, "rpc error response");
                     Err(RpcError::Rpc(err))
                 }
             }
