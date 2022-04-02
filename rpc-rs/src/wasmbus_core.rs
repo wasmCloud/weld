@@ -1235,7 +1235,7 @@ pub trait ActorReceiver: MessageDispatch + Actor {
 
 /// ActorSender sends messages to a Actor service
 /// Actor service
-/// client for sending Actor messages
+/// client for sending  Actor messages
 #[derive(Debug)]
 pub struct ActorSender<T: Transport> {
     transport: T,
@@ -1296,5 +1296,64 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender
         let value: HealthCheckResponse = crate::common::deserialize(&resp)
             .map_err(|e| RpcError::Deser(format!("'{}': HealthCheckResponse", e)))?;
         Ok(value)
+    }
+}
+
+/// ActorSender sends messages to a Actor service
+/// Actor service
+/// client for sending async Actor messages
+#[derive(Debug)]
+pub struct ActorAsyncSender<T: Transport> {
+    transport: T,
+}
+
+impl<T: Transport> ActorAsyncSender<T> {
+    /// Constructs a ActorAsyncSender with the specified transport
+    pub fn via(transport: T) -> Self {
+        Self { transport }
+    }
+
+    pub fn set_timeout(&self, interval: std::time::Duration) {
+        self.transport.set_timeout(interval);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<'send> ActorSender<crate::provider::ProviderTransport<'send>> {
+    /// Constructs a Sender using an actor's LinkDefinition,
+    /// Uses the provider's HostBridge for rpc
+    pub fn for_actor(ld: &'send crate::core::LinkDefinition) -> Self {
+        Self {
+            transport: crate::provider::ProviderTransport::new(ld, None),
+        }
+    }
+}
+#[cfg(target_arch = "wasm32")]
+impl ActorSender<crate::actor::prelude::WasmHost> {
+    /// Constructs a client for actor-to-actor messaging
+    /// using the recipient actor's public key
+    pub fn to_actor(actor_id: &str) -> Self {
+        let transport = crate::actor::prelude::WasmHost::to_actor(actor_id.to_string()).unwrap();
+        Self { transport }
+    }
+}
+#[async_trait]
+impl<T: Transport + std::marker::Sync + std::marker::Send> ActorAsyncSender<T> {
+    #[allow(unused)]
+    /// Perform health check. Called at regular intervals by host
+    async fn health_request(&self, ctx: &Context, arg: &HealthCheckRequest) -> RpcResult<()> {
+        let buf = crate::common::serialize(arg)?;
+        let resp = self
+            .transport
+            .send(
+                ctx,
+                Message {
+                    method: "Actor.HealthRequest",
+                    arg: Cow::Borrowed(&buf),
+                },
+                None,
+            )
+            .await?;
+        Ok(())
     }
 }

@@ -410,7 +410,10 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 };
                 self.write_service_interface(w, model, &service)?;
                 self.write_service_receiver(w, model, &service)?;
-                self.write_service_sender(w, model, &service)?;
+                // sync sender
+                self.write_service_sender(w, model, &service, false)?;
+                // async sender ignores return values
+                self.write_service_sender(w, model, &service, true)?;
             }
         }
         Ok(())
@@ -939,6 +942,43 @@ impl<'model> RustCodeGen<'model> {
             }
         }
         w.write(b"}\n\n");
+
+        w.write(&format!(
+            r#"
+            impl std::fmt::Display for {} {{
+              fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {{
+                match self {{
+            "#,
+            &self.to_type_name(&ident.to_string())
+        ));
+        for member in fields.iter() {
+            let variant_name = self.to_type_name(&member.id().to_string());
+            // for unit variants (which have no data field), print variant name only.
+            // If it's marked `@sensitive`, print name only
+            if member.target() == crate::model::unit_shape() || member.is_sensitive() {
+                w.write(&format!(
+                    "Self::{} => write!(f, \"{}\"),",
+                    &variant_name, &variant_name
+                ));
+            } else {
+                // For all others, print the name and the data it wraps
+                // In this auto-generated impl Display for Unions,
+                // we assume each variant is printable (implements Display)
+
+                // Ideally, we could detect here whether the target type
+                // implements Display or Debug.
+                // Another option (possibly in addition to detection):
+                // add trait(s) for the variants indicating how they should be printed in Display
+                // (That is how we could avoid printing large arrays, for example)
+                // Last option: disable implDebug with a codegenRust trait,
+                // so it can be implemented by hand
+                w.write(&format!(
+                    "Self::{}(v) => write!(f, \"{}({{}})\", &v.to_string()),",
+                    &variant_name, &variant_name,
+                ));
+            }
+        }
+        w.write(b"} } }");
         Ok(())
     }
 
@@ -968,7 +1008,7 @@ impl<'model> RustCodeGen<'model> {
             }
             let (op, op_traits) = get_operation(model, operation, service.id)?;
             let method_id = operation.shape_name();
-            let _flags = self.write_method_signature(w, method_id, op_traits, op)?;
+            let _flags = self.write_method_signature(w, method_id, op_traits, op, false)?;
             w.write(b";\n");
         }
         w.write(b"}\n\n");
@@ -1022,6 +1062,7 @@ impl<'model> RustCodeGen<'model> {
         method_id: &Identifier,
         method_traits: &AppliedTraits,
         op: &Operation,
+        send_async: bool,
     ) -> Result<MethodArgFlags> {
         let method_name = self.to_method_name(method_id, method_traits);
         let mut arg_flags = MethodArgFlags::Normal;
@@ -1071,15 +1112,20 @@ impl<'model> RustCodeGen<'model> {
         }
         w.write(b") -> RpcResult<");
         if let Some(output_type) = op.output() {
-            self.write_type(
-                w,
-                Ty::Shape(output_type),
-                if output_lt {
-                    Lifetime::L("static")
-                } else {
-                    Lifetime::None
-                },
-            )?;
+            if !send_async {
+                self.write_type(
+                    w,
+                    Ty::Shape(output_type),
+                    if output_lt {
+                        Lifetime::L("static")
+                    } else {
+                        Lifetime::None
+                    },
+                )?;
+            } else {
+                // for async, change return type to ()
+                w.write(b"()");
+            }
         } else {
             w.write(b"()");
         }
@@ -1220,6 +1266,7 @@ impl<'model> RustCodeGen<'model> {
         w: &mut Writer,
         model: &Model,
         service: &ServiceInfo,
+        send_async: bool,
     ) -> Result<()> {
         let doc = format!(
             "{}Sender sends messages to a {} service",
@@ -1230,12 +1277,12 @@ impl<'model> RustCodeGen<'model> {
         let proto = crate::model::wasmbus_proto(service.traits)?;
         let has_cbor = proto.map(|pv| pv.has_cbor()).unwrap_or(false);
         w.write(&format!(
-            r#"/// client for sending {} messages
+            r#"/// client for sending {} {} messages
               #[derive(Debug)]
-              pub struct {}Sender<T:Transport>  {{ transport: T }}
+              pub struct {}{}Sender<T:Transport>  {{ transport: T }}
 
-              impl<T:Transport> {}Sender<T> {{
-                  /// Constructs a {}Sender with the specified transport
+              impl<T:Transport> {}{}Sender<T> {{
+                  /// Constructs a {}{}Sender with the specified transport
                   pub fn via(transport: T) -> Self {{
                       Self{{ transport }}
                   }}
@@ -1245,7 +1292,14 @@ impl<'model> RustCodeGen<'model> {
                   }}
               }}
             "#,
-            service.id, service.id, service.id, service.id,
+            if send_async { "async" } else { "" },
+            service.id,
+            service.id,
+            if send_async { "Async" } else { "" },
+            service.id,
+            if send_async { "Async" } else { "" },
+            service.id,
+            if send_async { "Async" } else { "" },
         ));
         #[cfg(feature = "wasmbus")]
         w.write(&self.actor_receive_sender_constructors(service.id, service.traits)?);
@@ -1254,9 +1308,13 @@ impl<'model> RustCodeGen<'model> {
 
         // implement Trait for TraitSender
         w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
-        self.write_ident(w, service.id);
-        w.write(b" for ");
-        self.write_ident_with_suffix(w, service.id, "Sender")?;
+        if !send_async {
+            self.write_ident(w, service.id);
+            w.write(b" for ");
+            self.write_ident_with_suffix(w, service.id, "Sender")?;
+        } else {
+            self.write_ident_with_suffix(w, service.id, "AsyncSender")?;
+        }
         w.write(b"<T> {\n");
 
         for method_id in service.service.operations() {
@@ -1270,7 +1328,8 @@ impl<'model> RustCodeGen<'model> {
 
             let (op, method_traits) = get_operation(model, method_id, service.id)?;
             w.write(b"#[allow(unused)]\n");
-            let arg_flags = self.write_method_signature(w, method_ident, method_traits, op)?;
+            let arg_flags =
+                self.write_method_signature(w, method_ident, method_traits, op, send_async)?;
             let _arg_is_string = matches!(arg_flags, MethodArgFlags::ToString);
             w.write(b" {\n");
             if let Some(_op_input) = op.input() {
@@ -1316,37 +1375,42 @@ impl<'model> RustCodeGen<'model> {
             //w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\", arg: Cow::Borrowed(&buf)}, None).await?;\n");
             if let Some(op_output) = op.output() {
-                let symbol = op_output.shape_name().to_string();
-                if has_cbor {
-                    let crate_prefix = self.get_crate_path(op_output)?;
-                    w.write(&format!(
-                        r#"
+                if !send_async {
+                    let symbol = op_output.shape_name().to_string();
+                    if has_cbor {
+                        let crate_prefix = self.get_crate_path(op_output)?;
+                        w.write(&format!(
+                            r#"
                     let value : {} = {}::common::{}(&resp, &{}decode_{})
                         .map_err(|e| RpcError::Deser(format!("'{{}}': {}", e)))?;
                     Ok(value)
                     "#,
-                        self.type_string(Ty::Shape(op_output), Lifetime::L("static"))?,
-                        self.import_core,
-                        if self.has_lifetime(op_output) {
-                            "decode_owned"
-                        } else {
-                            "decode"
-                        },
-                        &crate_prefix,
-                        crate::strings::to_snake_case(&symbol),
-                        &symbol,
-                    ));
-                } else {
-                    w.write(&format!(
-                        r#"
+                            self.type_string(Ty::Shape(op_output), Lifetime::L("static"))?,
+                            self.import_core,
+                            if self.has_lifetime(op_output) {
+                                "decode_owned"
+                            } else {
+                                "decode"
+                            },
+                            &crate_prefix,
+                            crate::strings::to_snake_case(&symbol),
+                            &symbol,
+                        ));
+                    } else {
+                        w.write(&format!(
+                            r#"
                     let value : {} = {}::common::deserialize(&resp)
                         .map_err(|e| RpcError::Deser(format!("'{{}}': {}", e)))?;
                     Ok(value)
                     "#,
-                        self.type_string(Ty::Shape(op_output), Lifetime::Any)?,
-                        self.import_core,
-                        &symbol,
-                    ));
+                            self.type_string(Ty::Shape(op_output), Lifetime::Any)?,
+                            self.import_core,
+                            &symbol,
+                        ));
+                    }
+                } else {
+                    // send-async always returns ()
+                    w.write(b"Ok(())");
                 }
             } else {
                 w.write(b"Ok(())");
