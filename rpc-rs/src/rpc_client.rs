@@ -9,7 +9,7 @@ use std::{
 use ring::digest::{Context, SHA256};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
-use tracing::{debug, error, instrument, trace};
+use tracing::{debug, error, instrument, trace, warn};
 
 use crate::{
     chunkify,
@@ -349,20 +349,23 @@ impl RpcClient {
     /// If this client has a default timeout, and a response is not received within
     /// the appropriate time, an error will be returned.
     pub async fn request(&self, subject: String, data: Vec<u8>) -> RpcResult<Vec<u8>> {
-        let bytes = {
-            // TODO: no request_timeout in async nats yet
-            let resp =
-                   // if let Some(timeout) = self.timeout {
-                   // nats.request_timeout(subject, data, timeout)
-                   //     .await
-                   //     .map_err(|e| RpcError::Nats(e.to_string()))?
-                //} else {
-                    self.client.request(subject, data.into())
-                        .await
-                        .map_err(|e| RpcError::Nats(e.to_string()))?;
-            //};
-            resp.payload
-        };
+        let fut = self.client.request(subject, data.into());
+        let bytes = if let Some(timeout) = &self.timeout {
+            tokio::time::timeout(*timeout, fut).await.map_err(|_| {
+                warn!(
+                    timeout_sec = timeout.as_secs_f32(),
+                    "request timeout exceeded"
+                );
+                RpcError::Timeout(format!(
+                    "request timeout exceeded: {} sec",
+                    timeout.as_secs_f32()
+                ))
+            })?
+        } else {
+            fut.await
+        }
+        .map_err(|e| RpcError::Nats(e.to_string()))?
+        .payload;
         Ok(bytes.to_vec())
     }
 
