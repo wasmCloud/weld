@@ -11,9 +11,8 @@ release:
 test::
 	cargo test --all-features --all-targets -- --nocapture
 
-test::
+rust-check::
 	cargo clippy --all-features --all-targets
-	rustup default nightly
 	rustfmt --edition 2021 --check src/*.rs
 
-.PHONY: all build release clean lint validate test update
+.PHONY: all build release clean lint validate test update rust-check
