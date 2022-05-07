@@ -13,7 +13,10 @@ lint validate:
 	wash $@
 
 test::
-	cargo test --all-features --all-targets -- --nocapture
+	@-docker rm -f wasmbus_rpc_test_19222 2>/dev/null
+	@docker run -d --rm --name wasmbus_rpc_test_19222 -p 127.0.0.1:19222:4222 nats:2.8
+	NATS_URL=nats://127.0.0.1:19222 cargo test --all-features --all-targets -- --nocapture
+	@docker rm -f wasmbus_rpc_test_19222
 
 test::
 	cargo clippy --all-features --all-targets
