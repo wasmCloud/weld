@@ -10,7 +10,7 @@ MODEL_OUTPUT := codegen/src/wasmbus_model.rs rpc-rs/src/wasmbus_model.rs
 #MODEL_SRC    := examples/interface/wasmbus-core/wasmcloud-model.smithy \
 #				examples/interface/wasmbus-core/codegen.toml
 
-all build release clean test update lint validate::
+all build release clean test update lint validate rust-check::
 	for dir in $(subdirs); do \
 		$(MAKE) -C $$dir $@ ; \
 	done
