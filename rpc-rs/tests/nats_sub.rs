@@ -9,22 +9,31 @@ use wasmbus_rpc::{
 };
 
 const THREE_SEC: Duration = Duration::from_secs(3);
-//const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 const TEST_NATS_ADDR: &str = "demo.nats.io";
 const LATTICE_PREFIX: &str = "test_nats_sub";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
+fn nats_url() -> String {
+    if let Ok(addr) = std::env::var("NATS_URL") {
+        addr
+    } else {
+        TEST_NATS_ADDR.to_string()
+    }
+}
+
+fn is_demo() -> bool {
+    nats_url().contains("demo.nats.io")
+}
+
 /// create async nats client for test (sender or receiver)
 async fn make_client() -> RpcResult<RpcClient> {
-    let server_addr = wasmbus_rpc::anats::ServerAddr::from_str(TEST_NATS_ADDR).unwrap();
+    let nats_url = nats_url();
+    let server_addr = wasmbus_rpc::anats::ServerAddr::from_str(&nats_url).unwrap();
     let nc = wasmbus_rpc::anats::ConnectOptions::default()
         .connect(server_addr)
         .await
         .map_err(|e| {
-            RpcError::ProviderInit(format!(
-                "nats connection to {} failed: {}",
-                TEST_NATS_ADDR, e
-            ))
+            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_url, e))
         })?;
     let kp = wascap::prelude::KeyPair::new_user();
     let client = RpcClient::new(
@@ -65,7 +74,7 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
             }
             count += 1;
         }
-        println!("exiting: {}", count);
+        println!("received {} message(s)", count);
         count
     })
 }
@@ -94,7 +103,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             }
         }
         let _ = sub.unsubscribe().await;
-        println!("exiting: {}", count);
+        println!("listener exiting count={}", count);
         count
     })
 }
@@ -133,13 +142,12 @@ async fn listen_queue(
                     .expect("reply");
             }
             if &payload == "exit" {
-                debug!("listener {} received 'exit'", &subject);
                 let _ = sub.unsubscribe().await;
                 break;
             }
             count += 1;
         }
-        println!("listener {} exiting with count {}", &subject, count);
+        println!("subscriber '{}' exiting count={}", &subject, count);
         count
     })
 }
@@ -164,7 +172,7 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// send large messages to find size limits
+/// send large messages to find size limits and test chunking
 #[tokio::test]
 async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     if env_logger::try_init().is_err() {};
@@ -176,29 +184,29 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut pass_count = 0;
     let sender = make_client().await.expect("creating bin sender");
-    const TEST_SIZES: &[u32] = &[
-        100, 200,
-        // NOTE: if using 'demo.nats.io' as the test server,
-        // don't abuse it by running this test - only use larger sizes
-        // if testing against a local nats server.
+    //  messages sizes to test
+    let test_sizes = if is_demo() {
+        // if using 'demo.nats.io' as the test server,
+        // don't abuse it by running this test with very large sizes
         //
-        // 100_000, 200_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000,
-        //1_000_000, (1024 * 1024),
-        // The last size must be 1: signal to listen_bin to exit
-        1,
-    ];
-    for size in TEST_SIZES.iter() {
+        // The last size must be 1 to signal to listen_bin to exit
+        &[25u32, 100, 200, 500, 1000, 1]
+    } else {
+        // The last size must be 1 to signal to listen_bin to exit
+        &[25u32, 500, 10_000, 800_000, 1_000_000, 1]
+    };
+    for size in test_sizes.iter() {
         let mut data = Vec::with_capacity(*size as usize);
         data.resize(*size as usize, 255u8);
         let resp = match tokio::time::timeout(
-            Duration::from_millis(2000),
+            Duration::from_millis(3000),
             sender.request(topic.clone(), data),
         )
         .await
         {
             Ok(Ok(result)) => result,
             Ok(Err(rpc_err)) => {
-                eprintln!("rpc send error on msg size {}: {}", *size, rpc_err);
+                eprintln!("send error on msg size {}: {}", *size, rpc_err);
                 continue;
             }
             Err(timeout_err) => {
@@ -218,11 +226,11 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("FAIL: message_size: {}, got: {}", size, received_size);
         }
     }
-    assert_eq!(pass_count, TEST_SIZES.len(), "some size tests did not pass");
+    assert_eq!(pass_count, test_sizes.len(), "some size tests did not pass");
     let val = l1.await.expect("join");
     assert_eq!(
         val as usize,
-        TEST_SIZES.len(),
+        test_sizes.len(),
         "some messages were not received"
     );
     Ok(())
