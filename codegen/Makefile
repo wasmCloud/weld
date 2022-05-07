@@ -1,4 +1,4 @@
-# weld/rpc-rs/Makefile
+# weld/codegen/Makefile
 
 all: build
 

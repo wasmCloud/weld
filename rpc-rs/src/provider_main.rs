@@ -6,7 +6,6 @@ use crate::{
     core::HostData,
     error::RpcError,
     provider::{HostBridge, ProviderDispatch},
-    rpc_client::NatsClientType,
 };
 use once_cell::sync::OnceCell;
 use tracing_subscriber::EnvFilter;
@@ -90,7 +89,8 @@ where
         eprintln!("Logger was already created by provider, continuing: {}", e);
     }
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<bool>(1);
+
     eprintln!(
         "Starting capability provider {} instance {} with nats url {}",
         &host_data.provider_key, &host_data.instance_id, &host_data.lattice_rpc_url,
@@ -101,45 +101,26 @@ where
     } else {
         crate::provider::DEFAULT_NATS_ADDR
     };
-    let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
+    let nats_server = crate::anats::ServerAddr::from_str(nats_addr).map_err(|e| {
         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
     })?;
 
-    let nc = {
-        cfg_if::cfg_if! {
-            if #[cfg(feature="async_rewrite")] {
-
-                NatsClientType::AsyncRewrite(nats_experimental::connect(nats_addr).await
-                    .map_err(|e| {
-                        RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
-                    })?)
-
-            } else {
-                let nats_opts = match (
-                    host_data.lattice_rpc_user_jwt.trim(),
-                    host_data.lattice_rpc_user_seed.trim(),
-                ) {
-                    ("", "") => nats_aflowt::Options::default(),
-                    (rpc_jwt, rpc_seed) => {
-                        let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
-                        let jwt = rpc_jwt.to_owned();
-                        nats_aflowt::Options::with_jwt(
-                            move || Ok(jwt.to_owned()),
-                            move |nonce| kp.sign(nonce).unwrap(),
-                        )
-                    }
-                };
-                // Connect to nats
-                NatsClientType::Async(nats_opts
-                    .max_reconnects(None)
-                    .connect(vec![nats_server])
-                    .await
-                    .map_err(|e| {
-                        RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
-                    })?)
-            }
+    let nc = match (
+        host_data.lattice_rpc_user_jwt.trim(),
+        host_data.lattice_rpc_user_seed.trim(),
+    ) {
+        ("", "") => crate::anats::ConnectOptions::default(),
+        (rpc_jwt, rpc_seed) => {
+            let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
+            let jwt = rpc_jwt.to_owned();
+            crate::anats::ConnectOptions::with_jwt(jwt, move |nonce| kp.sign(nonce).unwrap())
         }
-    };
+    }
+    .connect(nats_server)
+    .await
+    .map_err(|e| {
+        RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+    })?;
 
     // initialize HostBridge
     let bridge = HostBridge::new_client(nc, &host_data)?;
@@ -162,18 +143,19 @@ where
 
     // subscribe to nats topics
     let _join = bridge
-        .connect(provider_dispatch, shutdown_tx)
+        .connect(provider_dispatch, &shutdown_tx)
         .await
         .map_err(|e| {
             RpcError::ProviderInit(format!("fatal error setting up subscriptions: {}", e))
         })?;
 
     // process subscription events and log messages, waiting for shutdown signal
-    let _ = shutdown_rx.await;
+    let _ = shutdown_rx.recv().await;
 
     // close chunkifiers
-    #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
     crate::chunkify::shutdown();
+
+    // TODO: tell bridge to close nc
 
     Ok(())
 }

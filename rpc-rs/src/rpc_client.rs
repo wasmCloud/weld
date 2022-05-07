@@ -11,9 +11,8 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use tracing::{debug, error, instrument, trace};
 
-#[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
-use crate::chunkify::chunkify_endpoint;
 use crate::{
+    chunkify,
     common::Message,
     core::{Invocation, InvocationResponse, WasmCloudEntity},
     error::{RpcError, RpcResult},
@@ -40,7 +39,7 @@ pub(crate) const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);
 #[derive(Clone)]
 pub struct RpcClient {
     /// sync or async nats client
-    client: NatsClientType,
+    client: crate::anats::Client,
     /// lattice rpc prefix
     lattice_prefix: String,
     /// secrets for signing invocations
@@ -49,16 +48,6 @@ pub struct RpcClient {
     host_id: String,
     /// timeout for rpc messages
     timeout: Option<Duration>,
-}
-
-#[derive(Clone)]
-#[non_exhaustive]
-pub(crate) enum NatsClientType {
-    Async(crate::anats::Connection),
-    #[cfg(feature = "async_rewrite")]
-    AsyncRewrite(nats_experimental::Client),
-    //#[cfg(feature = "chunkify")]
-    //Sync(nats::Connection),
 }
 
 /// Returns the rpc topic (subject) name for sending to an actor or provider.
@@ -83,26 +72,20 @@ impl RpcClient {
     /// parameters: async nats client, lattice rpc prefix (usually "default"),
     /// secret key for signing messages, host_id, and optional timeout.
     pub fn new(
-        nats: crate::anats::Connection,
+        nats: crate::anats::Client,
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
         host_id: String,
         timeout: Option<Duration>,
     ) -> Self {
-        Self::new_client(
-            NatsClientType::Async(nats),
-            lattice_prefix,
-            key,
-            host_id,
-            timeout,
-        )
+        Self::new_client(nats, lattice_prefix, key, host_id, timeout)
     }
 
     /// Constructs a new RpcClient with a nats connection.
     /// parameters: nats client, lattice rpc prefix (usually "default"),
     /// secret key for signing messages, host_id, and optional timeout.
     pub(crate) fn new_client(
-        nats: NatsClientType,
+        nats: crate::anats::Client,
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
         host_id: String,
@@ -119,25 +102,8 @@ impl RpcClient {
 
     /// convenience method for returning async client
     /// If the client is not the correct type, returns None
-    #[cfg(feature = "async_rewrite")]
-    pub fn get_async(&self) -> Option<nats_experimental::Client> {
-        use std::borrow::Borrow;
-        match self.client.borrow() {
-            NatsClientType::AsyncRewrite(nc) => Some(nc.clone()),
-            _ => None,
-        }
-    }
-
-    /// convenience method for returning async client
-    /// If the client is not the correct type, returns None
-    #[cfg(not(feature = "async_rewrite"))]
-    pub fn get_async(&self) -> Option<crate::anats::Connection> {
-        use std::borrow::Borrow;
-        #[allow(unreachable_patterns)]
-        match self.client.borrow() {
-            NatsClientType::Async(nats) => Some(nats.clone()),
-            _ => None,
-        }
+    pub fn client(&self) -> crate::anats::Client {
+        self.client.clone()
     }
 
     /// returns the lattice prefix
@@ -270,15 +236,7 @@ impl RpcClient {
         let topic = rpc_topic(&target, &self.lattice_prefix);
         let method = message.method.to_string();
         let len = message.arg.len();
-        let chunkify = {
-            cfg_if::cfg_if! {
-                if #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))] {
-                    crate::chunkify::needs_chunking(len)
-                } else {
-                    false
-                }
-            }
-        };
+        let chunkify = crate::chunkify::needs_chunking(len);
 
         #[allow(unused_variables)]
         let (invocation, body) = {
@@ -300,15 +258,13 @@ impl RpcClient {
             }
         };
         let nats_body = crate::common::serialize(&invocation)?;
-
-        #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
         if let Some(body) = body {
             let inv_id = invocation.id.clone();
             debug!(invocation_id = %inv_id, %len, "chunkifying invocation");
             // start chunking thread
             let lattice = self.lattice_prefix().to_string();
             tokio::task::spawn_blocking(move || {
-                let ce = chunkify_endpoint(None, lattice)?;
+                let ce = chunkify::chunkify_endpoint(None, lattice)?;
                 ce.chunkify(&inv_id, &mut body.as_slice())
             })
             // I tried starting the send to ObjectStore in background thread,
@@ -330,7 +286,7 @@ impl RpcClient {
         if expect_response {
             let payload = if let Some(timeout) = timeout {
                 // if we expect a response before timeout, finish sending all chunks, then wait for response
-                match tokio::time::timeout(timeout, self.request(&topic, &nats_body)).await {
+                match tokio::time::timeout(timeout, self.request(topic, nats_body)).await {
                     Ok(Ok(result)) => Ok(result),
                     Ok(Err(rpc_err)) => Err(RpcError::Nats(format!(
                         "rpc send error: {}: {}",
@@ -346,7 +302,7 @@ impl RpcClient {
                 }
             } else {
                 // no timeout, wait indefinitely or until host times out
-                self.request(&topic, &nats_body)
+                self.request(topic, nats_body)
                     .await
                     .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))
             }?;
@@ -358,13 +314,12 @@ impl RpcClient {
             match inv_response.error {
                 None => {
                     // was response chunked?
-                    #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
                     let msg = if inv_response.content_length.is_some()
                         && inv_response.content_length.unwrap() > inv_response.msg.len() as u64
                     {
                         let lattice = self.lattice_prefix().to_string();
                         tokio::task::spawn_blocking(move || {
-                            let ce = chunkify_endpoint(None, lattice)?;
+                            let ce = chunkify::chunkify_endpoint(None, lattice)?;
                             ce.get_unchunkified_response(&inv_response.invocation_id)
                         })
                         .await
@@ -372,8 +327,6 @@ impl RpcClient {
                     } else {
                         inv_response.msg
                     };
-                    #[cfg(not(feature = "chunkify"))]
-                    let msg = inv_response.msg;
                     trace!("rpc ok response");
                     Ok(msg)
                 }
@@ -384,7 +337,7 @@ impl RpcClient {
                 }
             }
         } else {
-            self.publish(&topic, &nats_body)
+            self.publish(&topic, nats_body)
                 .await
                 .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
             Ok(Vec::new())
@@ -395,45 +348,31 @@ impl RpcClient {
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
     /// If this client has a default timeout, and a response is not received within
     /// the appropriate time, an error will be returned.
-    pub async fn request(&self, subject: &str, data: &[u8]) -> RpcResult<Vec<u8>> {
-        use std::borrow::Borrow as _;
-
-        let bytes = match self.client.borrow() {
-            NatsClientType::Async(ref nats) => {
-                let resp = if let Some(timeout) = self.timeout {
-                    nats.request_timeout(subject, data, timeout)
+    pub async fn request(&self, subject: String, data: Vec<u8>) -> RpcResult<Vec<u8>> {
+        let bytes = {
+            // TODO: no request_timeout in async nats yet
+            let resp =
+                   // if let Some(timeout) = self.timeout {
+                   // nats.request_timeout(subject, data, timeout)
+                   //     .await
+                   //     .map_err(|e| RpcError::Nats(e.to_string()))?
+                //} else {
+                    self.client.request(subject, data.into())
                         .await
-                        .map_err(|e| RpcError::Nats(e.to_string()))?
-                } else {
-                    nats.request(subject, data)
-                        .await
-                        .map_err(|e| RpcError::Nats(e.to_string()))?
-                };
-                resp.data
-            }
-            // These two never get invoked
-            #[cfg(feature = "async_rewrite")]
-            NatsClientType::AsyncRewrite(_) => unimplemented!(),
-            //NatsClientType::Sync(_) => unimplemented!(),
+                        .map_err(|e| RpcError::Nats(e.to_string()))?;
+            //};
+            resp.payload
         };
-        Ok(bytes)
+        Ok(bytes.to_vec())
     }
 
     /// Send a nats message with no reply-to. Do not wait for a response.
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
-    pub async fn publish(&self, subject: &str, data: &[u8]) -> RpcResult<()> {
-        use std::borrow::Borrow as _;
-
-        match self.client.borrow() {
-            NatsClientType::Async(nats) => nats
-                .publish(subject, data)
-                .await
-                .map_err(|e| RpcError::Nats(e.to_string()))?,
-            // These two never get invoked
-            #[cfg(feature = "async_rewrite")]
-            NatsClientType::AsyncRewrite(_) => unimplemented!(),
-        }
-        Ok(())
+    pub async fn publish(&self, subject: &str, data: Vec<u8>) -> RpcResult<()> {
+        self.client
+            .publish(subject.to_string(), data.into())
+            .await
+            .map_err(|e| RpcError::Nats(e.to_string()))
     }
 }
 

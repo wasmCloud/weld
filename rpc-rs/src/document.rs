@@ -533,7 +533,7 @@ macro_rules! from_num_fn {
 }
 
 macro_rules! impl_try_from {
-    ($t:ty, $p: ident) => {
+    ($t:ty, $p:ident) => {
         impl TryFrom<Document> for $t {
             type Error = Document;
 
@@ -563,7 +563,7 @@ macro_rules! impl_try_from_num {
 }
 
 macro_rules! impl_try_from_ref {
-    ($t:ty, $p: ident) => {
+    ($t:ty, $p:ident) => {
         impl<'v> TryFrom<DocumentRef<'v>> for $t {
             type Error = DocumentRef<'v>;
 

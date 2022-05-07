@@ -1,4 +1,4 @@
-# weld/rpc-rs/Makefile
+# weld/macros/Makefile
 
 all: build
 
@@ -7,10 +7,6 @@ build clean update:
 
 release:
 	cargo build --release
-
-# Run lint check on all smithy models
-lint validate:
-	wash $@
 
 test::
 	cargo test --all-features --all-targets -- --nocapture

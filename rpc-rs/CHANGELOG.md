@@ -1,5 +1,22 @@
 # wasmbus-rpc Changelog
 
+## BREAKING CHANGES from 0.8.x to 0.9.0
+
+- nats-aflowt is replaced with async-nats!
+  - wasmbus_rpc::anats re-exports async_nats, not nats_aflowt.
+  - anats::ServerAddress renamed to anats::ServerAddr
+  - anats::Subscription is not public, replaced with anats::Subscriber
+  - anats::Subscription.close() replaced with anats::Subscriber.unsubscribe()
+  - anats::Options renamed to anats::ConnectOptions
+  - anats::Connection is no longer public. Use anats::Client instead.
+  - anats::Message.data renamed to .payload
+- HostBridge::new() changes
+  - first parameter is anats::Client instead of anats::Connection
+- RpcClient::new() changes 
+  - parameters are (anats::Client, Vec<u8>) instead of (anats::Connection, &[u8])
+- got rid of enum NatsClientType, replaced with anats::Client
+- removed feature "chunkify" (it is always enabled for non-wasm32 targets)
+
 ## 0.7.0
 
 ### Breaking changes (since 0.6.x)

@@ -196,7 +196,7 @@ macro_rules! unsupported_shape {
             traits: &AppliedTraits,
             shape: &$shape_type,
         ) -> Result<()> {
-            return Err(crate::error::Error::UnsupportedShape(
+            return Err(weld_codegen::error::Error::UnsupportedShape(
                 id.to_string(),
                 $doc.to_string(),
             ));

@@ -26,7 +26,7 @@ pub mod error;
 
 // re-export nats-aflowt
 #[cfg(not(target_arch = "wasm32"))]
-pub use nats_aflowt as anats;
+pub use async_nats as anats;
 
 /// This will be removed in a later version - use cbor instead to avoid dependence on minicbor crate
 /// @deprecated
@@ -50,7 +50,7 @@ pub type CallResult = std::result::Result<Vec<u8>, Box<dyn std::error::Error + S
 pub type HandlerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Sync + Send>>;
 pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 
-#[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod chunkify;
 mod wasmbus_core;
 
@@ -73,21 +73,20 @@ pub mod core {
                 }
 
                 /// Connect to nats using options provided by host
-                pub async fn nats_connect(&self) -> RpcResult<crate::anats::Connection> {
+                pub async fn nats_connect(&self) -> RpcResult<crate::anats::Client> {
                     use std::str::FromStr as _;
                     let nats_addr = if !self.lattice_rpc_url.is_empty() {
                         self.lattice_rpc_url.as_str()
                     } else {
                         crate::provider::DEFAULT_NATS_ADDR
                     };
-                    let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
+                    let nats_server = crate::anats::ServerAddr::from_str(nats_addr).map_err(|e| {
                         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
                     })?;
 
                     // Connect to nats
-                    let nc = nats_aflowt::Options::default()
-                        .max_reconnects(None)
-                        .connect(vec![nats_server])
+                    let nc = crate::anats::ConnectOptions::default()
+                        .connect(nats_server)
                         .await
                         .map_err(|e| {
                             RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))

@@ -1,16 +1,14 @@
 //! test nats subscriptions (queue and non-queue) with rpc_client
 #![cfg(test)]
 
-const THREE_SEC: Duration = Duration::from_secs(3);
-
 use std::{str::FromStr as _, time::Duration};
-
 use tracing::debug;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
     rpc_client::RpcClient,
 };
 
+const THREE_SEC: Duration = Duration::from_secs(3);
 //const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 const TEST_NATS_ADDR: &str = "demo.nats.io";
 const LATTICE_PREFIX: &str = "test_nats_sub";
@@ -18,10 +16,9 @@ const HOST_ID: &str = "HOST_test_nats_sub";
 
 /// create async nats client for test (sender or receiver)
 async fn make_client() -> RpcResult<RpcClient> {
-    let server_addr = wasmbus_rpc::anats::ServerAddress::from_str(TEST_NATS_ADDR).unwrap();
-    let nc = wasmbus_rpc::anats::Options::default()
-        .max_reconnects(None)
-        .connect(vec![server_addr])
+    let server_addr = wasmbus_rpc::anats::ServerAddr::from_str(TEST_NATS_ADDR).unwrap();
+    let nc = wasmbus_rpc::anats::ConnectOptions::default()
+        .connect(server_addr)
         .await
         .map_err(|e| {
             RpcError::ProviderInit(format!(
@@ -41,22 +38,27 @@ async fn make_client() -> RpcResult<RpcClient> {
 }
 
 async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task::JoinHandle<u64> {
+    use futures::StreamExt;
+
     let subject = subject.to_string();
     let pattern = pattern.to_string();
-    let nc = client.get_async().unwrap();
+    let nc = client.client();
 
     let pattern = regex::Regex::new(&pattern).unwrap();
-    let sub = nc.subscribe(&subject).await.expect("subscriber");
+    let mut sub = nc.subscribe(subject.clone()).await.expect("subscriber");
 
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
         while let Some(msg) = sub.next().await {
-            let payload = String::from_utf8_lossy(&msg.data);
+            let payload = String::from_utf8_lossy(&msg.payload);
             if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
-                println!("ERROR: payload on {}: {}", &subject, &payload);
+                println!("ERROR: payload on {}: {}", subject, &payload);
             }
             if let Some(reply_to) = msg.reply {
-                client.publish(&reply_to, b"ok").await.expect("reply");
+                client
+                    .publish(&reply_to, b"ok".to_vec())
+                    .await
+                    .expect("reply");
             }
             if payload == "exit" {
                 break;
@@ -64,25 +66,25 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
             count += 1;
         }
         println!("exiting: {}", count);
-        let _ = sub.close().await;
         count
     })
 }
 
 async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle<u64> {
+    use futures::StreamExt;
     let subject = subject.to_string();
-    let nc = client.get_async().unwrap();
+    let nc = client.client();
 
-    let sub = nc.subscribe(&subject).await.expect("subscriber");
+    let mut sub = nc.subscribe(subject.clone()).await.expect("subscriber");
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
         println!("listening subj: {}", &subject);
         while let Some(msg) = sub.next().await {
-            let size = msg.data.len();
+            let size = msg.payload.len();
             let response = format!("{}", size);
             if let Some(reply_to) = msg.reply {
                 client
-                    .publish(&reply_to, response.as_bytes())
+                    .publish(&reply_to, response.as_bytes().to_vec())
                     .await
                     .expect("reply");
             }
@@ -91,7 +93,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
                 break;
             }
         }
-        let _ = sub.close().await;
+        let _ = sub.unsubscribe().await;
         println!("exiting: {}", count);
         count
     })
@@ -103,32 +105,36 @@ async fn listen_queue(
     queue: &str,
     pattern: &str,
 ) -> tokio::task::JoinHandle<u64> {
+    use futures::StreamExt;
     let subject = subject.to_string();
     let queue = queue.to_string();
     let pattern = pattern.to_string();
-    let nc = client.get_async().unwrap();
+    let nc = client.client();
 
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
         let pattern = regex::Regex::new(&pattern).unwrap();
-        let sub = nc
-            .queue_subscribe(&subject, &queue)
+        let mut sub = nc
+            .queue_subscribe(subject.clone(), queue.clone())
             .await
             .expect("group subscriber");
-        debug!("listening subj: {} queue: {}", &subject, &queue);
+        debug!("listening subj: {} queue: {}", subject.clone(), &queue);
         while let Some(msg) = sub.next().await {
-            let payload = String::from_utf8_lossy(&msg.data);
+            let payload = String::from_utf8_lossy(&msg.payload);
             if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
                 debug!("ERROR: payload on {}: {}", &subject, &payload);
                 break;
             }
             if let Some(reply_to) = msg.reply {
                 debug!("listener {} replying ok", &subject);
-                client.publish(&reply_to, b"ok").await.expect("reply");
+                client
+                    .publish(&reply_to, b"ok".to_vec())
+                    .await
+                    .expect("reply");
             }
             if &payload == "exit" {
                 debug!("listener {} received 'exit'", &subject);
-                //let _ = sub.close().await;
+                let _ = sub.unsubscribe().await;
                 break;
             }
             count += 1;
@@ -147,8 +153,11 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
     let l1 = listen(make_client().await?, &topic, "^abc").await;
 
     let sender = make_client().await.expect("creating sender");
-    sender.publish(&topic, b"abc").await.expect("send");
-    sender.publish(&topic, b"exit").await.expect("send");
+    sender.publish(&topic, b"abc".to_vec()).await.expect("send");
+    sender
+        .publish(&topic, b"exit".to_vec())
+        .await
+        .expect("send");
     let val = l1.await.expect("join");
 
     assert_eq!(val, 1);
@@ -181,23 +190,25 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     for size in TEST_SIZES.iter() {
         let mut data = Vec::with_capacity(*size as usize);
         data.resize(*size as usize, 255u8);
-        let resp =
-            match tokio::time::timeout(Duration::from_millis(2000), sender.request(&topic, &data))
-                .await
-            {
-                Ok(Ok(result)) => result,
-                Ok(Err(rpc_err)) => {
-                    eprintln!("rpc send error on msg size {}: {}", *size, rpc_err);
-                    continue;
-                }
-                Err(timeout_err) => {
-                    eprintln!(
-                        "rpc timeout: sending msg of size {}: {}",
-                        *size, timeout_err
-                    );
-                    continue;
-                }
-            };
+        let resp = match tokio::time::timeout(
+            Duration::from_millis(2000),
+            sender.request(topic.clone(), data),
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(rpc_err)) => {
+                eprintln!("rpc send error on msg size {}: {}", *size, rpc_err);
+                continue;
+            }
+            Err(timeout_err) => {
+                eprintln!(
+                    "rpc timeout: sending msg of size {}: {}",
+                    *size, timeout_err
+                );
+                continue;
+            }
+        };
         let sbody = String::from_utf8_lossy(&resp);
         let received_size = sbody.parse::<u32>().expect("response contains int size");
         if *size == received_size {
@@ -258,14 +269,14 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     const SPLIT_TOTAL: usize = 6;
     const SINGLE_TOTAL: usize = 6;
     for _ in 0..SPLIT_TOTAL {
-        check_ok(sender.request(&topic_one, b"one").await?)?;
+        check_ok(sender.request(topic_one.clone(), b"one".to_vec()).await?)?;
     }
     for _ in 0..SINGLE_TOTAL {
-        check_ok(sender.request(&topic_two, b"two").await?)?;
+        check_ok(sender.request(topic_two.clone(), b"two".to_vec()).await?)?;
     }
-    check_ok(sender.request(&topic_one, b"exit").await?)?;
-    check_ok(sender.request(&topic_one, b"exit").await?)?;
-    check_ok(sender.request(&topic_two, b"exit").await?)?;
+    check_ok(sender.request(topic_one.clone(), b"exit".to_vec()).await?)?;
+    check_ok(sender.request(topic_one.clone(), b"exit".to_vec()).await?)?;
+    check_ok(sender.request(topic_two.clone(), b"exit".to_vec()).await?)?;
 
     let v3 = wait_for(thread3, THREE_SEC).await??;
     let v2 = wait_for(thread2, THREE_SEC).await??;
