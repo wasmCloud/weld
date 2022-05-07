@@ -21,6 +21,11 @@ test::
 check-model: $(MODEL_OUTPUT)
 	@diff $(MODEL_OUTPUT) || (echo ERROR: Model files differ && exit 1)
 
+gen:
+	$(MAKE) -C codegen release
+	(cd codegen && target/release/codegen)
+	(cd rpc-rs && ../codegen/target/release/codegen)
+
 #WELD_SRC := bin/Cargo.toml bin/src/*.rs codegen/Cargo.toml codegen/templates/*.toml \
 #			codegen/templates/*.hbs codegen/templates/rust/*.hbs
 #target/debug/weld: $(WELD_SRC)
