@@ -247,10 +247,13 @@ impl<T: Transport + Sync + Send> AnySender<T> {
         MessageFormat::Cbor.write_header(&mut buf).unwrap();
         minicbor_ser::to_writer(arg, &mut buf).map_err(|e| RpcError::Ser(e.to_string()))?;
         let resp = self
-            .send_raw(ctx, Message {
-                method,
-                arg: Cow::Borrowed(&buf),
-            })
+            .send_raw(
+                ctx,
+                Message {
+                    method,
+                    arg: Cow::Borrowed(&buf),
+                },
+            )
             .await?;
         let result: Out =
             minicbor_ser::from_slice(&resp).map_err(|e| RpcError::Deser(e.to_string()))?;
@@ -268,10 +271,13 @@ impl<T: Transport + Sync + Send> AnySender<T> {
         MessageFormat::Cbor.write_header(&mut buf).unwrap();
         crate::minicbor::encode(arg, &mut buf).map_err(|e| RpcError::Ser(e.to_string()))?;
         let resp = self
-            .send_raw(ctx, Message {
-                method,
-                arg: Cow::Borrowed(&buf),
-            })
+            .send_raw(
+                ctx,
+                Message {
+                    method,
+                    arg: Cow::Borrowed(&buf),
+                },
+            )
             .await?;
         let result: Out =
             crate::minicbor::decode(&resp).map_err(|e| RpcError::Deser(e.to_string()))?;

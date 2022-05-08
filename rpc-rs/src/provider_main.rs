@@ -142,20 +142,16 @@ where
     }
 
     // subscribe to nats topics
-    let _join = bridge
-        .connect(provider_dispatch, &shutdown_tx)
-        .await
-        .map_err(|e| {
-            RpcError::ProviderInit(format!("fatal error setting up subscriptions: {}", e))
-        })?;
+    let _join = bridge.connect(provider_dispatch, &shutdown_tx).await;
 
-    // process subscription events and log messages, waiting for shutdown signal
+    // run until we receive a shutdown request from host
     let _ = shutdown_rx.recv().await;
 
     // close chunkifiers
-    crate::chunkify::shutdown();
+    let _ = tokio::task::spawn_blocking(crate::chunkify::shutdown).await;
 
-    // TODO: tell bridge to close nc
+    // flush async_nats client
+    bridge.flush().await;
 
     Ok(())
 }
