@@ -69,7 +69,7 @@ pub trait Transport: Send {
 
 // select serialization/deserialization mode
 pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
-    rmp_serde::from_read_ref(buf).map_err(|e| RpcError::Deser(e.to_string()))
+    rmp_serde::from_slice(buf).map_err(|e| RpcError::Deser(e.to_string()))
 }
 
 pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
@@ -261,8 +261,12 @@ impl<T: Transport + Sync + Send> AnySender<T> {
     }
 
     /// Send rpc with serializable payload using cbor encode/decode
-    pub async fn send_cbor<'de, In: crate::minicbor::Encode, Out: crate::cbor::MDecodeOwned>(
-        &self,
+    pub async fn send_cbor<
+        'de,
+        In: crate::minicbor::Encode<()>,
+        Out: crate::cbor::MDecodeOwned<()>,
+    >(
+        &mut self,
         ctx: &Context,
         method: &str,
         arg: &In,

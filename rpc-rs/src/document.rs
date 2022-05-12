@@ -684,7 +684,10 @@ impl FromIterator<Document> for Document {
 pub fn encode_document<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &Document,
-) -> RpcResult<()> {
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
     e.array(2)?;
     match val {
         Document::Object(map) => {
@@ -730,7 +733,10 @@ pub fn encode_document<W: crate::cbor::Write>(
 pub fn encode_document_ref<'v, W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &DocumentRef<'v>,
-) -> RpcResult<()> {
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
     e.array(2)?;
     match val {
         DocumentRef::Object(map) => {
@@ -777,7 +783,10 @@ pub fn encode_document_ref<'v, W: crate::cbor::Write>(
 pub fn encode_number<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &Number,
-) -> RpcResult<()> {
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
     e.array(2)?;
     match val {
         Number::PosInt(val) => {

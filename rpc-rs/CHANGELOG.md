@@ -17,6 +17,16 @@
 - got rid of enum NatsClientType, replaced with anats::Client
 - removed feature "chunkify" (it is always enabled for non-wasm32 targets)
 
+- RpcError does not implement Serialize, Deserialize, or PartialEq
+  (unless/until we can find a good reason to support these) 
+
+
+## non-breaking changes
+- upgraded minicbor to 0.16-rc1
+- replaced ring with sha2 for sha256
+- upgraded uuid
+
+
 ## 0.7.0
 
 ### Breaking changes (since 0.6.x)

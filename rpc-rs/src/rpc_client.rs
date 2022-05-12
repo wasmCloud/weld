@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use ring::digest::{Context, SHA256};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use tracing::{debug, error, instrument, trace, warn};
@@ -385,13 +384,15 @@ pub(crate) fn invocation_hash(
     method: &str,
     args: &[u8],
 ) -> String {
-    let mut context = Context::new(&SHA256);
-    context.update(origin_url.as_bytes());
-    context.update(target_url.as_bytes());
-    context.update(method.as_bytes());
-    context.update(args);
-    let digest = context.finish();
-    data_encoding::HEXUPPER.encode(digest.as_ref())
+    use sha2::Digest as _;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(origin_url.as_bytes());
+    hasher.update(target_url.as_bytes());
+    hasher.update(method.as_bytes());
+    hasher.update(args);
+    let digest = hasher.finalize();
+    data_encoding::HEXUPPER.encode(digest.as_slice())
 }
 
 /// Create a new random uuid for invocations.
@@ -404,7 +405,7 @@ pub fn make_uuid() -> String {
     // uuid uses getrandom, which uses the operating system's RNG
     // as the source of random numbers.
     Uuid::new_v4()
-        .to_simple()
+        .as_simple()
         .encode_lower(&mut Uuid::encode_buffer())
         .to_string()
 }

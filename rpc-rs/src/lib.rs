@@ -1,35 +1,27 @@
-//! Wasmcloud Weld runtime library
+//! wasmcloud-rpc runtime library
 //!
 //! This crate provides code generation and runtime support for wasmcloud rpc messages
 //! used by [wasmcloud](https://wasmcloud.dev) actors and capability providers.
 //!
+#![feature(backtrace)]
 
 mod timestamp;
 // re-export Timestamp
 pub use timestamp::Timestamp;
 
 mod actor_wasm;
+pub mod cbor;
 pub mod common;
+pub(crate) mod document;
+pub mod error;
 pub mod provider;
 pub(crate) mod provider_main;
 mod wasmbus_model;
-pub mod model {
-    // re-export model lib as "model"
-    pub use crate::wasmbus_model::*;
 
-    // declare unit type
-    pub type Unit = ();
-}
-pub mod cbor;
-pub(crate) mod document;
-pub mod error;
-
-// re-export nats-aflowt
+/// re-export async-nats as anats
 #[cfg(not(target_arch = "wasm32"))]
 pub use async_nats as anats;
 
-/// This will be removed in a later version - use cbor instead to avoid dependence on minicbor crate
-/// @deprecated
 pub use minicbor;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,6 +45,13 @@ pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod chunkify;
 mod wasmbus_core;
+
+pub mod model {
+    // re-export model lib as "model"
+    pub use crate::wasmbus_model::*;
+    // declare unit type
+    pub type Unit = ();
+}
 
 pub mod core {
     // re-export core lib as "core"
@@ -271,6 +270,91 @@ pub mod actor {
                 }
 
                 pub fn console_log(_s: &str) {}
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod some_tests {
+    use anyhow::anyhow;
+
+    fn ret_rpc_err(val: u8) -> Result<u8, crate::error::RpcError> {
+        let x = match val {
+            0 => Ok(0),
+            10 | 11 => Err(crate::error::RpcError::Other(format!("rpc:{}", val))),
+            _ => Ok(255),
+        }?;
+        Ok(x)
+    }
+
+    fn ret_any(val: u8) -> Result<u8, anyhow::Error> {
+        let x = match val {
+            0 => Ok(0),
+            20 | 21 => Err(anyhow!("any:{}", val)),
+            _ => Ok(255),
+        }?;
+        Ok(x)
+    }
+
+    fn either(val: u8) -> Result<u8, anyhow::Error> {
+        let x = match val {
+            0 => 0,
+            10 | 11 => ret_rpc_err(val)?,
+            20 | 21 => ret_any(val)?,
+            _ => 255,
+        };
+        Ok(x)
+    }
+
+    #[test]
+    fn values() {
+        use crate::error::RpcError;
+
+        let v0 = ret_rpc_err(0);
+        assert_eq!(v0.ok().unwrap(), 0);
+
+        let v10 = either(10);
+        assert!(v10.is_err());
+        assert_eq!(v10.as_ref().err().unwrap().to_string().as_str(), "rpc:10");
+        if let Err(e) = &v10 {
+            if let Some(rpc_err) = e.downcast_ref::<RpcError>() {
+                eprintln!("10 is rpc error");
+                match rpc_err {
+                    RpcError::Other(s) => {
+                        eprintln!("RpcError::Other({})", s);
+                    }
+                    RpcError::Nats(s) => {
+                        eprintln!("RpcError::Nats({})", s);
+                    }
+                    _ => {
+                        eprintln!("RpcError::unknown {}", rpc_err);
+                    }
+                }
+            } else {
+                eprintln!("10 is not rpc error. value={}", e);
+            }
+        }
+
+        let v20 = either(20);
+        assert!(v20.is_err());
+        assert_eq!(v20.as_ref().err().unwrap().to_string().as_str(), "any:20");
+        if let Err(e) = &v20 {
+            if let Some(rpc_err) = e.downcast_ref::<RpcError>() {
+                eprintln!("20 is rpc error");
+                match rpc_err {
+                    RpcError::Other(s) => {
+                        eprintln!("RpcError::Other({})", s);
+                    }
+                    RpcError::Nats(s) => {
+                        eprintln!("RpcError::Nats({})", s);
+                    }
+                    _ => {
+                        eprintln!("RpcError::unknown {}", rpc_err);
+                    }
+                }
+            } else {
+                eprintln!("20 is not rpc error. value={}", e);
             }
         }
     }

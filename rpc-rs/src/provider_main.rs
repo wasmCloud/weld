@@ -111,16 +111,19 @@ where
     ) {
         ("", "") => crate::anats::ConnectOptions::default(),
         (rpc_jwt, rpc_seed) => {
-            let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
+            let key_pair = std::sync::Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
             let jwt = rpc_jwt.to_owned();
-            crate::anats::ConnectOptions::with_jwt(jwt, move |nonce| kp.sign(nonce).unwrap())
+            crate::anats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                let key_pair = key_pair.clone();
+                async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+            })
         }
     }
     .connect(nats_server)
-    .await
-    .map_err(|e| {
-        RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
-    })?;
+    .await?;
+    //.map_err(|e| {
+    //  RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+    //})?;
 
     // initialize HostBridge
     let bridge = HostBridge::new_client(nc, &host_data)?;
