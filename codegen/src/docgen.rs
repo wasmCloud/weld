@@ -109,7 +109,6 @@ impl CodeGen for DocGen {
     }
 
     // never called
-    #[doc(hidden)]
     fn get_file_extension(&self) -> &'static str {
         "html"
     }

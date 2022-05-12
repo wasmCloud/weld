@@ -26,7 +26,7 @@ impl Default for RustSourceFormatter {
     fn default() -> Self {
         RustSourceFormatter {
             program: "rustfmt".to_string(),
-            edition: "2018".to_string(),
+            edition: "2021".to_string(),
             extra: Vec::new(),
         }
     }
@@ -40,7 +40,12 @@ impl SourceFormatter for RustSourceFormatter {
                 self.edition
             )));
         }
-        let mut args = vec!["--edition", &self.edition];
+        let mut args = vec![
+            "--edition",
+            &self.edition,
+            "--config",
+            "format_generated_files=true",
+        ];
         args.extend(self.extra.iter().map(|s| s.as_str()));
         args.extend(source_files.iter());
         run_command(&self.program, &args)?;

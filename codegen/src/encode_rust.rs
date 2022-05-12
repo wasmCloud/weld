@@ -422,6 +422,7 @@ impl<'model> RustCodeGen<'model> {
                 #[doc(hidden)] #[allow(unused_mut)] {}
                 pub fn encode_{}<W: {}::cbor::Write>(
                     mut e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
+                    where <W as {}::cbor::Write>::Error: std::fmt::Display
                 {{
                 "#,
                     &name,
@@ -431,6 +432,7 @@ impl<'model> RustCodeGen<'model> {
                     self.import_core,
                     if is_empty_struct { "_val" } else { "val" },
                     &id.shape_name(),
+                    self.import_core,
                 );
                 s.push_str(&body);
                 s.push_str("Ok(())\n}\n");
