@@ -2,8 +2,11 @@
 
 all: build
 
-build clean update:
+build clean update::
 	cargo $@
+
+clean::
+    $(shell test -d examples/iface/rust && cd examples/iface/rust && cargo clean)
 
 release:
 	cargo build --release
