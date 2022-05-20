@@ -120,6 +120,8 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
         let context = wasmbus_rpc::common::Context::default();
         let actor = #actor_ident ::default();
         let resp = futures::executor::block_on({
+            // log request bytes
+            //console_log(&format!("actor recieve: {}", &data_encoding::HEXLOWER.encode(&slice)));
             MessageDispatch::dispatch(
                 &actor,
                 &context,
@@ -129,6 +131,12 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
                 },
             )
         });
+        /*
+        if let Ok(Message{ ref arg, ..}) = resp {
+            // log response bytes
+            console_log(&format!("actor response: {}", &data_encoding::HEXLOWER.encode(&arg)));
+        }
+        */
         match resp {
             Ok(Message { arg, .. }) => {
                 unsafe {
