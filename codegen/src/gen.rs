@@ -417,7 +417,7 @@ pub(crate) trait CodeGen {
         {
             ser_name
         } else {
-            field_name.clone()
+            field.id().to_string()
         };
         Ok((field_name, ser_name))
     }

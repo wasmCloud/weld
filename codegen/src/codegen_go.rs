@@ -96,7 +96,7 @@ enum MethodArgFlags {
 /// Returns the nil or zero of the type
 pub fn zero_of(id: &ShapeID, kind: Option<&ShapeKind>) -> &'static str {
     if let Some(ShapeKind::Simple(simple)) = kind {
-        // matching on kind is preferable, because it dealiases to get to the root type
+        // matching on kind is preferable to using id, because it de-aliases to get to the root type
         return match simple {
             Simple::Blob => "make([]byte,0)",
             Simple::Boolean => "false",
@@ -178,8 +178,6 @@ impl<'model> CodeGen for GoCodeGen<'model> {
         _renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
         self.namespace = None;
-        //self.import_core = "actor".to_string(); // WASMBUS_RPC_CRATE.to_string();
-
         if let Some(model) = model {
             if let Some(Value::Array(codegen_min)) = model.metadata_value("codegen") {
                 let current_ver =
@@ -308,7 +306,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
             r#"package {}
             import (
                 {}
-                "github.com/wapc/tinygo-msgpack" //nolint
+                msgpack "github.com/wasmcloud/tinygo-msgpack" //nolint
             )"#,
             &self.package,
             if ns != wasmcloud_model_namespace() && ns != wasmcloud_core_namespace() {
@@ -345,8 +343,11 @@ impl<'model> CodeGen for GoCodeGen<'model> {
         shapes.sort_by_key(|v| v.0);
 
         for (id, traits, shape) in shapes.into_iter() {
-            let mut want_serde = !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap())
-                && !params.contains_key("no_serde");
+            // traits are only needed for the rust implementation of codegen, so skip them in go
+            if traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
+                continue;
+            }
+            let mut want_serde = !params.contains_key("no_serde");
             match shape {
                 ShapeKind::Simple(simple) => {
                     self.declare_simple_shape(w, id.shape_name(), traits, simple)?;
@@ -385,7 +386,8 @@ impl<'model> CodeGen for GoCodeGen<'model> {
                         id.shape_name()
                     );
                     want_serde = false;
-                    //self.declare_union_shape(w, id, traits, strukt)?;
+                    //TODO: union
+                    // self.declare_union_shape(w, id, traits, strukt)?;
                 }
                 ShapeKind::Operation(_)
                 | ShapeKind::Resource(_)
@@ -422,43 +424,29 @@ impl<'model> CodeGen for GoCodeGen<'model> {
     }
 
     /// Write a single-line comment
-    fn write_comment(&mut self, w: &mut Writer, kind: CommentKind, line: &str) {
-        w.write(match kind {
-            CommentKind::Documentation => "// ",
-            CommentKind::Inner => "// ",
-            CommentKind::InQuote => "// ", // not applicable for Rust
-        });
-        w.write(line);
-        w.write(b"\n");
+    fn write_comment(&mut self, w: &mut Writer, _kind: CommentKind, line: &str) {
+        // all comment types same for Go
+        writeln!(w, "// {}", line).unwrap();
     }
 
-    /// generate Go method name: capitalize to make public
+    /// generate Go method name: capitalized to make public
     fn to_method_name_case(&self, name: &str) -> String {
         crate::strings::to_pascal_case(name)
     }
 
-    /// generate Go field name: capitalize to make public
+    /// generate Go field name: capitalized to make public
     fn to_field_name_case(&self, name: &str) -> String {
         crate::strings::to_pascal_case(name)
     }
 
-    /// generate Go type name
+    /// generate Go type name: PascalCase
     fn to_type_name_case(&self, name: &str) -> String {
         crate::strings::to_pascal_case(name)
     }
 
-    /// returns assemblyscript source file extension "as"
+    /// returns Go source file extension
     fn get_file_extension(&self) -> &'static str {
-        "as"
-    }
-}
-
-/// returns true if the file path ends in ".as"
-#[allow(dead_code)]
-pub(crate) fn is_asm_source(path: &Path) -> bool {
-    match path.extension() {
-        Some(s) => s.to_string_lossy().as_ref() == "as",
-        _ => false,
+        "go"
     }
 }
 
@@ -484,40 +472,37 @@ macro_rules! encode_alias {
 impl<'model> GoCodeGen<'model> {
     /// Write encoder and decoder for top-level shapes in this package
     fn declare_msgpack(&self, w: &mut Writer, id: &ShapeID, kind: &ShapeKind) -> Result<()> {
-        //if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap())
-        //    && !params.contains_key("no_serde")
-
         let name = self.type_string(Ty::Shape(id))?;
         let (decode_fn, base_shape) = self.shape_decoder_msgpack(id, kind)?;
         writeln!(
             w,
-            r#"
+            r#"// Encode serializes a {} using msgpack
             func (o *{}) Encode(encoder msgpack.Writer) error {{
                 {}
                 return nil
             }}
+            
+            // Decode deserializes a {} using msgpack
             func Decode{}(d msgpack.Decoder) ({},error) {{
                 {}
-            }}
-            "#,
+            }}"#,
+            &name,
             &name,
             self.shape_encoder_msgpack(id, kind, "o")?,
+            &name,
             &name,
             &name,
             if self.is_decoder_function(kind) {
                 decode_fn
             } else {
                 format!(
-                    r#"
-                  val,err := {}
+                    r#"val,err := {}
                   if err != nil {{
                     return {},err
                   }}
-                  return {},nil
-                  "#,
+                  return {},nil "#,
                     decode_fn,
                     zero_of(&base_shape, Some(kind)), // not needed anymore
-                    // cast to return value
                     if &base_shape != id {
                         format!(
                             "{}(val)",
@@ -582,7 +567,6 @@ impl<'model> GoCodeGen<'model> {
         let mut s = String::new();
         match ty {
             Ty::Opt(id) => {
-                // TODO: if not nillable, add a * before
                 s.push_str(&self.type_string(Ty::Shape(id))?);
             }
             Ty::Ref(id) => {
@@ -655,12 +639,6 @@ impl<'model> GoCodeGen<'model> {
         Ok(s)
     }
 
-    /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
-    fn write_type(&mut self, w: &mut Writer, ty: Ty<'_>) -> Result<()> {
-        w.write(&self.type_string(ty)?);
-        Ok(())
-    }
-
     // declaration for simple type
     fn declare_simple_shape(
         &mut self,
@@ -670,35 +648,33 @@ impl<'model> GoCodeGen<'model> {
         simple: &Simple,
     ) -> Result<()> {
         self.apply_documentation_traits(w, id, traits);
-        w.write(b"type ");
-        self.write_ident(w, id);
-        let ty = match simple {
-            Simple::Blob => "[]byte".into(),
-            Simple::Boolean => "bool".into(),
-            Simple::String => "string".into(),
-            Simple::Byte => "int8".into(),
-            Simple::Short => "int16".into(),
-            Simple::Integer => "int32".into(),
-            Simple::Long => "int64".into(),
-            Simple::Float => "float32".into(),
-            Simple::Double => "float64".into(),
-            Simple::Document => format!("{}Document", &self.import_core),
-            Simple::Timestamp => format!("{}Timestamp", &self.import_core),
-            Simple::BigInteger => {
-                // TODO: unsupported
-                todo!()
+        writeln!(
+            w,
+            "type {} {}",
+            &self.to_type_name_case(&id.to_string()),
+            match simple {
+                Simple::Blob => "[]byte".into(),
+                Simple::Boolean => "bool".into(),
+                Simple::String => "string".into(),
+                Simple::Byte => "int8".into(),
+                Simple::Short => "int16".into(),
+                Simple::Integer => "int32".into(),
+                Simple::Long => "int64".into(),
+                Simple::Float => "float32".into(),
+                Simple::Double => "float64".into(),
+                Simple::Document => format!("{}Document", &self.import_core),
+                Simple::Timestamp => format!("{}Timestamp", &self.import_core),
+                Simple::BigInteger => {
+                    // TODO: unsupported
+                    todo!()
+                }
+                Simple::BigDecimal => {
+                    // TODO: unsupported
+                    todo!()
+                }
             }
-            Simple::BigDecimal => {
-                // TODO: unsupported
-                todo!()
-            }
-        };
-        w.write(b" ");
-        w.write(&ty);
-        //let end_mark = w.pos();
-        //self.type_aliases
-        //    .insert(id.to_string(), w.get_slice(start_pos, end_pos).to_string());
-        w.write(b"\n\n");
+        )
+        .unwrap();
         Ok(())
     }
 
@@ -746,7 +722,6 @@ impl<'model> GoCodeGen<'model> {
         traits: &AppliedTraits,
         strukt: &StructureOrUnion,
     ) -> Result<()> {
-        //let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
         let ident = id.shape_name();
         self.apply_documentation_traits(w, ident, traits);
         writeln!(
@@ -842,12 +817,7 @@ impl<'model> GoCodeGen<'model> {
         service: &ServiceInfo,
     ) -> Result<()> {
         self.apply_documentation_traits(w, service.id, service.traits);
-
-        //#[cfg(feature = "wasmbus")]
-        //self.add_wasmbus_comments(w, service)?;
-
         writeln!(w, "type {} interface {{", &service.id).unwrap();
-
         for operation in service.service.operations() {
             // if operation is not declared in this namespace, don't define it here
             if let Some(ref ns) = self.namespace {
@@ -862,6 +832,24 @@ impl<'model> GoCodeGen<'model> {
             w.write(b"\n");
         }
         w.write(b"}\n\n");
+
+        writeln!(
+            w,
+            r#"
+        // {}Handler is called by an actor during `main` to generate a dispatch handler
+        // The output of this call should be passed into `actor.RegisterHandlers`
+        func {}Handler(actor_ {}) {}Handler {{
+            return {}NewHandler("{}", &{}Receiver{{}}, actor_)
+        }}"#,
+            &service.id,
+            &service.id,
+            &service.id,
+            &self.import_core,
+            &self.import_core,
+            &service.id,
+            &service.id,
+        )
+        .unwrap();
 
         self.write_service_contract_getter(w, service)?;
         Ok(())
@@ -886,29 +874,6 @@ impl<'model> GoCodeGen<'model> {
         Ok(())
     }
 
-    /*
-    #[cfg(feature = "wasmbus")]
-    fn add_wasmbus_comments(&mut self, w: &mut Writer, service: &ServiceInfo) -> Result<()> {
-        // currently the only thing we do with Wasmbus in codegen is add comments
-        let wasmbus: Option<Wasmbus> = get_trait(service.traits, crate::model::wasmbus_trait())?;
-        if let Some(wasmbus) = wasmbus {
-            if let Some(contract_id) = service.wasmbus_contract_id() {
-                let text = format!("wasmbus.contractId: {}", contract_id);
-                self.write_documentation(w, service.id, &text);
-            }
-            if wasmbus.provider_receive {
-                let text = "wasmbus.providerReceive";
-                self.write_documentation(w, service.id, text);
-            }
-            if wasmbus.actor_receive {
-                let text = "wasmbus.actorReceive";
-                self.write_documentation(w, service.id, text);
-            }
-        }
-        Ok(())
-    }
-     */
-
     /// write trait function declaration "async fn method(args) -> Result< return_type, actor.RpcError >"
     /// does not write trailing semicolon so this can be used for declaration and implementation
     fn write_method_signature(
@@ -928,11 +893,12 @@ impl<'model> GoCodeGen<'model> {
         }
         w.write(&method_name);
         write!(w, "(ctx *{}Context", &self.import_core).unwrap();
+        // optional input parameter
         if let Some(input_type) = op.input() {
-            w.write(b", arg "); // pass arg by reference
-            self.write_type(w, Ty::Ref(input_type))?;
+            write!(w, ", arg {}", self.type_string(Ty::Ref(input_type))?).unwrap();
         }
         w.write(b") ");
+        // return type with output output parameter
         if let Some(output_type) = op.output() {
             write!(w, "({}, error)", self.type_string(Ty::Ptr(output_type))?).unwrap();
         } else {
@@ -955,18 +921,17 @@ impl<'model> GoCodeGen<'model> {
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service.id, service.traits);
         writeln!(w, "type {}Receiver struct {{}}", service.id).unwrap();
-
-        //let proto = crate::model::wasmbus_proto(service.traits)?;
-
         writeln!(
             w,
-            r#"func (r* {}Receiver) dispatch(ctx *{}Context, svc {}, message *{}Message) (*{}Message, error) {{
-                switch message.Method {{ "#,
-            service.id,
+            r#"func (r* {}Receiver) Dispatch(ctx *{}Context, svc interface{{}}, message *{}Message) (*{}Message, error) {{
+                svc_,_ := svc.({})
+                switch message.Method {{
+                 "#,
+            &service.id,
             &self.import_core,
-            service.id,
             &self.import_core,
             &self.import_core,
+            &service.id,
         ).unwrap();
 
         for method_id in service.service.operations() {
@@ -982,6 +947,7 @@ impl<'model> GoCodeGen<'model> {
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" : {\n");
             if let Some(op_input) = op.input() {
+                // decode input into 'value'
                 writeln!(
                     w,
                     r#"
@@ -995,11 +961,11 @@ impl<'model> GoCodeGen<'model> {
                 )
                 .unwrap();
             }
-            // resp, err := svc.method(ctx, &value);
+            // resp, err := svc_.method(ctx, &value);
             let method_name = self.to_method_name(method_ident, method_traits);
             writeln!(
                 w,
-                r#"{} := svc.{} (ctx{})
+                r#"{} := svc_.{} (ctx{})
                 if err != nil {{ 
                     return nil,err
                 }}"#,
@@ -1008,9 +974,8 @@ impl<'model> GoCodeGen<'model> {
                 if op.has_input() { ", value" } else { "" },
             )
             .unwrap();
-
+            // serialize result
             if let Some(op_output) = op.output() {
-                // serialize result
                 writeln!(
                     w,
                     r#"
@@ -1020,8 +985,7 @@ impl<'model> GoCodeGen<'model> {
             	    buf := make([]byte, sizer.Len())
             	    encoder := msgpack.NewEncoder(buf)
             	    enc := &encoder
-                    {}
-                    "#,
+                    {}"#,
                     self.value_encoder_msgpack(op_output, "resp", "size_enc")?,
                     self.value_encoder_msgpack(op_output, "resp", "enc")?,
                 )
@@ -1029,24 +993,32 @@ impl<'model> GoCodeGen<'model> {
             } else {
                 w.write(b"buf := make([]byte, 0)\n");
             }
-            //w.write(br#"console_log(format!("actor result {}b",buf.len())); "#);
-            write!(w, "return &{}Message {{ Method: \"", &self.import_core).unwrap();
-            w.write(&self.full_dispatch_name(service.id, method_ident));
-            w.write(b"\", Arg: buf }, nil\n");
-            w.write(b"}\n"); // end case
+            // return result,
+            writeln!(
+                w,
+                r#" return &{}Message {{ Method: "{}", Arg: buf }}, nil
+                    }}"#,
+                &self.import_core,
+                &self.full_dispatch_name(service.id, method_ident),
+            )
+            .unwrap();
         }
+        // handle fallthrough case of unrcognied operation
+        // end case, end dispatch function
         writeln!(
             w,
-            "default : return nil, {}NewRpcError(\"MethodNotHandled\", \"{}.\" + message.Method)",
+            r#"default: 
+                   return nil, {}NewRpcError("MethodNotHandled", "{}." + message.Method)
+               }}
+            }}
+            "#,
             &self.import_core, service.id,
         )
         .unwrap();
-        w.write(b"}\n}\n\n"); // end case, end fn dispatch, end trait
         Ok(())
     }
 
     /// writes the service sender struct and constructor
-    // pub struct FooSender{ ... }
     fn write_service_sender(
         &mut self,
         w: &mut Writer,
@@ -1059,17 +1031,18 @@ impl<'model> GoCodeGen<'model> {
         );
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service.id, service.traits);
-        // implement Trait for TraitSender
+        let core_prefix = &self.import_core;
         writeln!(
             w,
-            "type {}Sender struct {{ transport {}Transport }}",
-            service.id, &self.import_core,
+            r#"type {}Sender struct {{ transport {}Transport }}
+            {}
+            {}"#,
+            service.id,
+            core_prefix,
+            self.actor_receive_sender_constructors(service.id, service.traits)?,
+            self.provider_receive_sender_constructors(service.id, service.traits)?,
         )
         .unwrap();
-
-        //let proto = crate::model::wasmbus_proto(service.traits)?;
-        w.write(&self.actor_receive_sender_constructors(service.id, service.traits)?);
-        w.write(&self.provider_receive_sender_constructors(service.id, service.traits)?);
 
         for method_id in service.service.operations() {
             // we don't add operations defined in another namespace
@@ -1079,7 +1052,6 @@ impl<'model> GoCodeGen<'model> {
                 }
             }
             let method_ident = method_id.shape_name();
-
             let (op, op_traits) = get_operation(model, method_id, service.id)?;
             let _arg_is_string = false;
             let _flags = self.write_method_signature(
@@ -1110,28 +1082,25 @@ impl<'model> GoCodeGen<'model> {
             } else {
                 w.write(b"buf := make([]byte,0)\n");
             }
-            write!(
+            writeln!(
                 w,
-                "{}s.transport.Send(ctx, {}Message{{ Method: ",
+                r#"{}s.transport.Send(ctx, {}Message{{ Method: "{}", Arg:buf }})"#,
                 if op.output().is_some() { "out_buf,_ := " } else { "" },
                 &self.import_core,
+                &self.full_dispatch_name(service.id, method_ident),
             )
             .unwrap();
-            w.write(b"\"");
-            w.write(&self.full_dispatch_name(service.id, method_ident));
-            //w.write(&self.op_dispatch_name(method_ident));
-            w.write(b"\", Arg: buf})\n");
             if let Some(op_output) = op.output() {
                 let out_kind = self.model.unwrap().shape(op_output).map(|s| s.body());
                 writeln!(
                     w,
-                    r#"
-                        d := msgpack.NewDecoder(out_buf)
+                    r#"d := msgpack.NewDecoder(out_buf)
                         resp,err_ := {}
                         if err_ != nil {{ 
                             return {},err_
                         }}
-                        return {}resp,nil"#,
+                        return {}resp,nil
+                     }}"#,
                     self.value_decoder_msgpack(op_output)?,
                     zero_of(op_output, out_kind),
                     // use ptr for nillable return types
@@ -1139,9 +1108,8 @@ impl<'model> GoCodeGen<'model> {
                 )
                 .unwrap();
             } else {
-                w.write(b"return nil\n");
+                w.write(b"return nil\n}\n");
             }
-            w.write(b" }\n");
         }
         Ok(())
     }
@@ -1149,7 +1117,7 @@ impl<'model> GoCodeGen<'model> {
     /// add sender constructors for calling actors, for services that declare actorReceive
     #[cfg(feature = "wasmbus")]
     fn actor_receive_sender_constructors(
-        &mut self,
+        &self,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
     ) -> Result<String> {
@@ -1177,7 +1145,7 @@ impl<'model> GoCodeGen<'model> {
     /// This is only used for wasm32 targets and for services that declare 'providerReceive'
     #[cfg(feature = "wasmbus")]
     fn provider_receive_sender_constructors(
-        &mut self,
+        &self,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
     ) -> Result<String> {
@@ -1273,6 +1241,9 @@ impl<'model> GoCodeGen<'model> {
         writeln!(s, "encoder.WriteMapSize({})", fields.len()).unwrap();
         for field in fields.iter() {
             let (field_name, ser_name) = self.get_field_name_and_ser_name(field)?;
+            if id.shape_name().to_string() == "HttpRequest" {
+                eprintln!("HttpRequest field:{} ser_name:{}", &field_name, &ser_name);
+            }
             writeln!(s, "encoder.WriteString(\"{}\")", &ser_name).unwrap();
             let field_val = self.value_encoder_msgpack(
                 field.target(),
@@ -1303,18 +1274,18 @@ impl<'model> GoCodeGen<'model> {
         let mut s = String::new();
         writeln!(
             s,
-            r#"
-            var val {}
+            r#"var val {}
             isNil,err := d.IsNextNil()
-            if err != nil {{ return val,err }}
-            if isNil {{ return val,nil }}
+            if err != nil || isNil {{ 
+                err = d.Skip()
+                return val,err 
+            }}
             size,err := d.ReadMapSize()
             if err != nil {{ return val,err }}
             for i := uint32(0); i < size; i++ {{
                 field,err := d.ReadString()
                 if err != nil {{ return val,err }}
-                switch field {{
-       "#,
+                switch field {{"#,
             self.to_type_name_case(&id.shape_name().to_string())
         )
         .unwrap();
@@ -1334,14 +1305,12 @@ impl<'model> GoCodeGen<'model> {
             s,
             r#" default: 
                 err = d.Skip()
-                if err != nil {{ return val,err }}
             }}
             if err != nil {{
                 return val, err
             }}
             }}
-            return val,nil
-            "#,
+            return val,nil"#,
         )
         .unwrap();
         Ok(s)
@@ -1372,38 +1341,35 @@ impl<'model> GoCodeGen<'model> {
                 // (in case there are >1 map)
                 let key_var = format!("key_{}", crate::strings::to_camel_case(val));
                 let val_var = format!("val_{}", crate::strings::to_camel_case(val));
-                let mut s = format!(
+                format!(
                     r#"encoder.WriteMapSize(uint32(len(*{})))
                     for {},{} := range *{} {{
+                        {}
+                        {}
+                    }}        
                     "#,
-                    val, &key_var, &val_var, val,
-                );
-                s.push_str(&self.value_encoder_msgpack(map.key().target(), &key_var, "encoder")?);
-                s.push('\n');
-                s.push_str(&self.value_encoder_msgpack(
-                    map.value().target(),
+                    val,
+                    &key_var,
                     &val_var,
-                    "encoder",
-                )?);
-                s.push_str("\n}\n");
-                s
+                    val,
+                    &self.value_encoder_msgpack(map.key().target(), &key_var, "encoder")?,
+                    &self.value_encoder_msgpack(map.value().target(), &val_var, "encoder")?,
+                )
             }
             ShapeKind::List(list) => {
                 let item_var = format!("item_{}", crate::strings::to_camel_case(val));
-                let mut s = format!(
+                format!(
                     r#"
                     encoder.WriteArraySize(uint32(len(*{})))
                     for _,{} := range *{} {{
+                        {}
+                    }}
                     "#,
-                    val, &item_var, val,
-                );
-                s.push_str(&self.value_encoder_msgpack(
-                    list.member().target(),
+                    val,
                     &item_var,
-                    "encoder",
-                )?);
-                s.push_str("\n}\n");
-                s
+                    val,
+                    &self.value_encoder_msgpack(list.member().target(), &item_var, "encoder",)?
+                )
             }
             ShapeKind::Set(set) => {
                 let item_var = format!("item_{}", crate::strings::to_camel_case(val));
@@ -1510,11 +1476,10 @@ impl<'model> GoCodeGen<'model> {
                 let val_type = self.type_string(Ty::Shape(map.value().target()))?;
                 (
                     format!(
-                        r#"
-                        isNil,err := d.IsNextNil()
-                        if err != nil && isNil {{
-                            d.Skip()
-                       		return make(map[{}]{}, 0), nil
+                        r#"isNil,err := d.IsNextNil()
+                        if err != nil || isNil {{
+                            err = d.Skip()
+                       		return make(map[{}]{}, 0), err
                         }}
                        	size,err := d.ReadMapSize()
                         if err != nil {{ size = 0 }}
@@ -1525,8 +1490,7 @@ impl<'model> GoCodeGen<'model> {
                            if err != nil {{ return val, err }}
                            val[k] = v
                         }}
-                        return val,nil
-                    "#,
+                        return val,nil"#,
                         &key_type,
                         &val_type,
                         &key_type,
@@ -1541,12 +1505,11 @@ impl<'model> GoCodeGen<'model> {
                 let item_type = self.type_string(Ty::Shape(list.member().target()))?;
                 (
                     format!(
-                        r#"
-                        isNil,err := d.IsNextNil()
-                        if err == nil && isNil {{ 
-                            d.Skip()
-                       		return make([]{}, 0), nil
-                  		}}
+                        r#"isNil,err := d.IsNextNil()
+                        if err != nil || isNil {{
+                            err = d.Skip()
+                       		return make([]{}, 0), err
+                        }}
                        	size,err := d.ReadArraySize()
                         if err != nil {{ size = 0 }}
                         val := make([]{}, size)
@@ -1555,8 +1518,7 @@ impl<'model> GoCodeGen<'model> {
                            if err != nil {{ return val, err }}
                            val = append(val,item)
                         }}
-                        return val,nil
-                    "#,
+                        return val,nil"#,
                         &item_type,
                         &item_type,
                         &self.value_decoder_msgpack(list.member().target())?,
@@ -1568,12 +1530,11 @@ impl<'model> GoCodeGen<'model> {
                 let item_type = self.to_type_name_case(&set.member().target().to_string());
                 (
                     format!(
-                        r#"
-                        isNil,err := d.IsNextNil()
-                        if err == nil && isNil {{ 
-                            d.Skip()
-                       		return make([]{}, 0), nil
-                  		}}
+                        r#"isNil,err := d.IsNextNil()
+                        if err != nil || isNil {{
+                            err = d.Skip()
+                       		return make([]{}, 0), err
+                        }}
                        	size,err := d.ReadArraySize()
                         if err != nil {{ size = 0 }}
                         val := make([]{}, size)
@@ -1582,8 +1543,7 @@ impl<'model> GoCodeGen<'model> {
                            if err != nil {{ return val, err }}
                            val = append(val,item)
                         }}
-                        return val,nil
-                    "#,
+                        return val,nil"#,
                         &item_type,
                         &item_type,
                         &self.value_decoder_msgpack(set.member().target())?,

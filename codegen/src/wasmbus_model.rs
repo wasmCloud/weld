@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub const SMITHY_VERSION: &str = "1.0";
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
+/// This declaration supports code generations and is not part of an actor or provider sdk
 pub type CapabilityContractId = String;
 
 /// 32-bit float
@@ -30,6 +31,7 @@ pub type I64 = i64;
 pub type I8 = i8;
 
 /// list of identifiers
+/// This declaration supports code generations and is not part of an actor or provider sdk
 pub type IdentifierList = Vec<String>;
 
 /// unsigned 16-bit int
