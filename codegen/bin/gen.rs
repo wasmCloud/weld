@@ -1,17 +1,16 @@
 // stripped-down no-options config generator. `wash gen` has more options.
 // The purpose of this is to test new builds of codegen without needing to rebuild wash.
-// output is relative to current dir.
+// Output is relative to current dir (language out_dir in codegen.toml can use absolute paths)
+
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
 use weld_codegen::{config::CodegenConfig, sources_to_model};
 
 const VERBOSITY: u8 = 1; // none=0, +1 for higher
 
 fn main() -> Result<()> {
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "./codegen.toml".to_string());
+    let config_path = std::env::args().nth(1).unwrap_or_else(|| "./codegen.toml".to_string());
     let config_path = std::fs::canonicalize(PathBuf::from(&config_path))?;
     let config = load_config(&config_path)
         .with_context(|| format!("error loading config at {}", config_path.display()))?;
