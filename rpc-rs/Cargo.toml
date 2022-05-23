@@ -34,7 +34,7 @@ thiserror = "1.0"
 time = "0.3.7"
 tokio-timer = "0.2"
 toml = "0.5"
-tracing = { version = "0.1", features = ["log"] }
+tracing = { version = "0.1.34", features = ["log"] }
 tracing-futures = "0.2"
 wasmbus-macros = { path = "../macros", version = "0.1.8" }
 minicbor-ser = "0.1.2"
@@ -47,7 +47,7 @@ bigdecimal = { version = "0.3", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
-async-nats = { git = "https://github.com/cosmonic/nats.rs", branch="fix/remove-more-mut" }
+async-nats = { git = "https://github.com/nats-io/nats.rs" }
 
 nats = { version = "0.19", optional = true }
 nkeys = "0.2"
