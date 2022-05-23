@@ -15,7 +15,6 @@ use atelier_core::model::{
 };
 
 use crate::{
-    codegen_asm::AsmCodeGen,
     codegen_go::GoCodeGen,
     codegen_py::PythonCodeGen,
     codegen_rust::RustCodeGen,
@@ -222,7 +221,7 @@ fn gen_for_language<'model>(
 ) -> Box<dyn CodeGen + 'model> {
     match language {
         OutputLanguage::Rust => Box::new(RustCodeGen::new(model)),
-        OutputLanguage::AssemblyScript => Box::new(AsmCodeGen::new(model)),
+        //OutputLanguage::AssemblyScript => Box::new(AsmCodeGen::new(model)),
         OutputLanguage::Python => Box::new(PythonCodeGen::new(model)),
         OutputLanguage::TinyGo => Box::new(GoCodeGen::new(model, true)),
         OutputLanguage::Go => Box::new(GoCodeGen::new(model, false)),

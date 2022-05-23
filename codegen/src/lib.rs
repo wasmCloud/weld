@@ -5,18 +5,12 @@ use error::Error;
 pub mod config;
 pub mod docgen;
 
-pub(crate) mod codegen_asm;
 pub(crate) mod codegen_go;
 pub(crate) mod codegen_py;
 pub(crate) mod codegen_rust;
 
-pub(crate) mod decode_asm;
-//pub(crate) mod decode_go;
 pub(crate) mod decode_py;
 pub(crate) mod decode_rust;
-
-pub(crate) mod encode_asm;
-//pub(crate) mod encode_go;
 
 pub(crate) mod encode_py;
 pub(crate) mod encode_rust;

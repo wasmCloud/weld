@@ -1,6 +1,6 @@
 //! Go language code-generator
 //!
-use std::{collections::HashMap, fmt::Write as _, path::Path, str::FromStr, string::ToString};
+use std::{collections::HashMap, fmt, fmt::Write as _, path::Path, str::FromStr, string::ToString};
 
 use atelier_core::{
     model::{
@@ -46,6 +46,20 @@ enum MethodSigType {
     Interface,
     Sender(String),
     //Receiver,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum DecodeRef {
+    Plain,
+    ByRef,
+}
+impl fmt::Display for DecodeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", match self {
+            DecodeRef::Plain => "d",
+            DecodeRef::ByRef => "&d",
+        })
+    }
 }
 
 #[allow(dead_code)]
@@ -483,7 +497,7 @@ impl<'model> GoCodeGen<'model> {
             }}
             
             // Decode deserializes a {} using msgpack
-            func Decode{}(d msgpack.Decoder) ({},error) {{
+            func Decode{}(d *msgpack.Decoder) ({},error) {{
                 {}
             }}"#,
             &name,
@@ -957,7 +971,7 @@ impl<'model> GoCodeGen<'model> {
                             return nil,err_
                         }}
                         "#,
-                    self.value_decoder_msgpack(op_input)?,
+                    self.value_decoder_msgpack(op_input, DecodeRef::ByRef)?,
                 )
                 .unwrap();
             }
@@ -1101,7 +1115,7 @@ impl<'model> GoCodeGen<'model> {
                         }}
                         return {}resp,nil
                      }}"#,
-                    self.value_decoder_msgpack(op_output)?,
+                    self.value_decoder_msgpack(op_output, DecodeRef::ByRef)?,
                     zero_of(op_output, out_kind),
                     // use ptr for nillable return types
                     if by_value(op_output) { "" } else { "&" }
@@ -1277,7 +1291,6 @@ impl<'model> GoCodeGen<'model> {
             r#"var val {}
             isNil,err := d.IsNextNil()
             if err != nil || isNil {{ 
-                err = d.Skip()
                 return val,err 
             }}
             size,err := d.ReadMapSize()
@@ -1297,7 +1310,7 @@ impl<'model> GoCodeGen<'model> {
                         val.{},err = {}"#,
                 ser_name,
                 &field_name,
-                &self.value_decoder_msgpack(field.target())?,
+                &self.value_decoder_msgpack(field.target(), DecodeRef::Plain)?,
             )
             .unwrap();
         }
@@ -1478,7 +1491,6 @@ impl<'model> GoCodeGen<'model> {
                     format!(
                         r#"isNil,err := d.IsNextNil()
                         if err != nil || isNil {{
-                            err = d.Skip()
                        		return make(map[{}]{}, 0), err
                         }}
                        	size,err := d.ReadMapSize()
@@ -1495,8 +1507,8 @@ impl<'model> GoCodeGen<'model> {
                         &val_type,
                         &key_type,
                         &val_type,
-                        &self.value_decoder_msgpack(map.key().target())?,
-                        &self.value_decoder_msgpack(map.value().target())?,
+                        &self.value_decoder_msgpack(map.key().target(), DecodeRef::Plain)?,
+                        &self.value_decoder_msgpack(map.value().target(), DecodeRef::Plain)?,
                     ),
                     id.clone(),
                 )
@@ -1507,7 +1519,6 @@ impl<'model> GoCodeGen<'model> {
                     format!(
                         r#"isNil,err := d.IsNextNil()
                         if err != nil || isNil {{
-                            err = d.Skip()
                        		return make([]{}, 0), err
                         }}
                        	size,err := d.ReadArraySize()
@@ -1521,7 +1532,7 @@ impl<'model> GoCodeGen<'model> {
                         return val,nil"#,
                         &item_type,
                         &item_type,
-                        &self.value_decoder_msgpack(list.member().target())?,
+                        &self.value_decoder_msgpack(list.member().target(), DecodeRef::Plain)?,
                     ),
                     id.clone(),
                 )
@@ -1532,7 +1543,6 @@ impl<'model> GoCodeGen<'model> {
                     format!(
                         r#"isNil,err := d.IsNextNil()
                         if err != nil || isNil {{
-                            err = d.Skip()
                        		return make([]{}, 0), err
                         }}
                        	size,err := d.ReadArraySize()
@@ -1546,7 +1556,7 @@ impl<'model> GoCodeGen<'model> {
                         return val,nil"#,
                         &item_type,
                         &item_type,
-                        &self.value_decoder_msgpack(set.member().target())?,
+                        &self.value_decoder_msgpack(set.member().target(), DecodeRef::Plain)?,
                     ),
                     id.clone(),
                 )
@@ -1619,7 +1629,7 @@ impl<'model> GoCodeGen<'model> {
     }
 
     /// write statement(s) to encode an object in msgpack
-    pub(crate) fn value_decoder_msgpack(&self, id: &ShapeID) -> Result<String> {
+    pub(crate) fn value_decoder_msgpack(&self, id: &ShapeID, d_byref: DecodeRef) -> Result<String> {
         let name = id.shape_name().to_string();
         let stmt = if id.namespace() == prelude_namespace_id() {
             match name.as_ref() {
@@ -1632,8 +1642,8 @@ impl<'model> GoCodeGen<'model> {
                 SHAPE_LONG | SHAPE_PRIMITIVELONG => "d.ReadUint64()".into(),
                 SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "d.ReadFloat32()".into(),
                 SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "d.ReadFloat64()".into(),
-                SHAPE_TIMESTAMP => format!("{}DecodeTimestamp(d)", &self.import_core),
-                SHAPE_DOCUMENT => format!("{}DecodeDocument(d)", &self.import_core),
+                SHAPE_TIMESTAMP => format!("{}DecodeTimestamp({})", &self.import_core, &d_byref),
+                SHAPE_DOCUMENT => format!("{}DecodeDocument({})", &self.import_core, &d_byref),
                 //SHAPE_BIGINTEGER => todo!(),
                 //SHAPE_BIGDECIMAL => todo!(),
                 _ => return Err(Error::UnsupportedType(name)),
@@ -1651,16 +1661,18 @@ impl<'model> GoCodeGen<'model> {
                 b"F64" => "d.ReadFloat64()".into(),
                 b"F32" => "d.ReadFloat32()".into(),
                 _ => format!(
-                    "{}Decode{}(d)",
+                    "{}Decode{}({})",
                     &self.import_core,
                     crate::strings::to_pascal_case(&id.shape_name().to_string()),
+                    &d_byref,
                 ),
             }
         } else {
             format!(
-                "{}Decode{}(d)",
+                "{}Decode{}({})",
                 self.get_crate_path(id)?,
                 crate::strings::to_pascal_case(&id.shape_name().to_string()),
+                &d_byref,
             )
         };
         Ok(stmt)
