@@ -411,7 +411,8 @@ impl<'model> CodeGen for GoCodeGen<'model> {
                 }
             }
             if want_serde {
-                self.declare_msgpack(w, id, shape)?;
+                self.declare_ser_de(w, id, shape, "msgpack", "M")?;
+                self.declare_ser_de(w, id, shape, "cbor", "C")?;
             }
         }
         Ok(())
@@ -485,26 +486,42 @@ macro_rules! encode_alias {
 
 impl<'model> GoCodeGen<'model> {
     /// Write encoder and decoder for top-level shapes in this package
-    fn declare_msgpack(&self, w: &mut Writer, id: &ShapeID, kind: &ShapeKind) -> Result<()> {
+    fn declare_ser_de(
+        &self,
+        w: &mut Writer,
+        id: &ShapeID,
+        kind: &ShapeKind,
+        lib_name: &str,
+        fn_type: &str,
+    ) -> Result<()> {
         let name = self.type_string(Ty::Shape(id))?;
         let (decode_fn, base_shape) = self.shape_decoder_msgpack(id, kind)?;
         writeln!(
             w,
-            r#"// Encode serializes a {} using msgpack
-            func (o *{}) Encode(encoder msgpack.Writer) error {{
+            r#"// Encode{} serializes a {} using {}
+            func (o *{}) Encode{}(encoder {}.Writer) error {{
                 {}
                 return nil
             }}
             
-            // Decode deserializes a {} using msgpack
-            func Decode{}(d *msgpack.Decoder) ({},error) {{
+            // Decode{}{} deserializes a {} using {}
+            func Decode{}{}(d *{}.Decoder) ({},error) {{
                 {}
             }}"#,
+            fn_type,
             &name,
+            lib_name,
             &name,
-            self.shape_encoder_msgpack(id, kind, "o")?,
+            fn_type,
+            lib_name,
+            self.shape_encoder_msgpack(id, kind, "o", fn_type)?,
             &name,
+            fn_type,
             &name,
+            lib_name,
+            &name,
+            fn_type,
+            lib_name,
             &name,
             if self.is_decoder_function(kind) {
                 decode_fn
@@ -934,6 +951,8 @@ impl<'model> GoCodeGen<'model> {
         );
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service.id, service.traits);
+        let proto = crate::model::wasmbus_proto(service.traits)?;
+        let has_cbor = proto.map(|pv| pv.has_cbor()).unwrap_or(false);
         writeln!(w, "type {}Receiver struct {{}}", service.id).unwrap();
         writeln!(
             w,
@@ -965,13 +984,18 @@ impl<'model> GoCodeGen<'model> {
                 writeln!(
                     w,
                     r#"
-                        d := msgpack.NewDecoder(message.Arg)
+                        d := {}.NewDecoder(message.Arg)
                         value,err_ := {}
                         if err_ != nil {{ 
                             return nil,err_
                         }}
                         "#,
-                    self.value_decoder_msgpack(op_input, DecodeRef::ByRef)?,
+                    if has_cbor { "cbor" } else { "msgpack" },
+                    self.value_decoder_msgpack(
+                        op_input,
+                        DecodeRef::ByRef,
+                        if has_cbor { "C" } else { "M" },
+                    )?,
                 )
                 .unwrap();
             }
@@ -993,15 +1017,27 @@ impl<'model> GoCodeGen<'model> {
                 writeln!(
                     w,
                     r#"
-            	    var sizer msgpack.Sizer
+            	    var sizer {}.Sizer
             	    size_enc := &sizer
             	    {} 
             	    buf := make([]byte, sizer.Len())
-            	    encoder := msgpack.NewEncoder(buf)
+            	    encoder := {}.NewEncoder(buf)
             	    enc := &encoder
                     {}"#,
-                    self.value_encoder_msgpack(op_output, "resp", "size_enc")?,
-                    self.value_encoder_msgpack(op_output, "resp", "enc")?,
+                    if has_cbor { "cbor" } else { "msgpack" },
+                    self.value_encoder_msgpack(
+                        op_output,
+                        "resp",
+                        "size_enc",
+                        if has_cbor { "C" } else { "M" },
+                    )?,
+                    self.value_encoder_msgpack(
+                        op_output,
+                        "resp",
+                        "enc",
+                        if has_cbor { "C" } else { "M" },
+                    )?,
+                    if has_cbor { "cbor" } else { "msgpack" },
                 )
                 .unwrap();
             } else {
@@ -1045,6 +1081,8 @@ impl<'model> GoCodeGen<'model> {
         );
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service.id, service.traits);
+        let proto = crate::model::wasmbus_proto(service.traits)?;
+        let has_cbor = proto.map(|pv| pv.has_cbor()).unwrap_or(false);
         let core_prefix = &self.import_core;
         writeln!(
             w,
@@ -1080,17 +1118,29 @@ impl<'model> GoCodeGen<'model> {
                 writeln!(
                     w,
                     r#"
-            	    var sizer msgpack.Sizer
+            	    var sizer {}.Sizer
             	    size_enc := &sizer
             	    {} 
             	    buf := make([]byte, sizer.Len())
             	    
-            	    var encoder = msgpack.NewEncoder(buf)
+            	    var encoder = {}.NewEncoder(buf)
             	    enc := &encoder
                     {}
             	"#,
-                    self.value_encoder_msgpack(op_input, "arg", "size_enc",)?,
-                    self.value_encoder_msgpack(op_input, "arg", "enc",)?,
+                    if has_cbor { "cbor" } else { "msgpack" },
+                    self.value_encoder_msgpack(
+                        op_input,
+                        "arg",
+                        "size_enc",
+                        if has_cbor { "C" } else { "M" },
+                    )?,
+                    self.value_encoder_msgpack(
+                        op_input,
+                        "arg",
+                        "enc",
+                        if has_cbor { "C" } else { "M" },
+                    )?,
+                    if has_cbor { "cbor" } else { "msgpack" },
                 )
                 .unwrap();
             } else {
@@ -1108,14 +1158,15 @@ impl<'model> GoCodeGen<'model> {
                 let out_kind = self.model.unwrap().shape(op_output).map(|s| s.body());
                 writeln!(
                     w,
-                    r#"d := msgpack.NewDecoder(out_buf)
+                    r#"d := {}.NewDecoder(out_buf)
                         resp,err_ := {}
                         if err_ != nil {{ 
                             return {},err_
                         }}
                         return {}resp,nil
                      }}"#,
-                    self.value_decoder_msgpack(op_output, DecodeRef::ByRef)?,
+                    if has_cbor { "cbor" } else { "msgpack" },
+                    self.value_decoder_msgpack(op_output, DecodeRef::ByRef, fn_type)?,
                     zero_of(op_output, out_kind),
                     // use ptr for nillable return types
                     if by_value(op_output) { "" } else { "&" }
@@ -1249,20 +1300,19 @@ impl<'model> GoCodeGen<'model> {
         id: &ShapeID,
         strukt: &StructureOrUnion,
         val: &str,
+        fn_type: &str,
     ) -> Result<String> {
         let (fields, _) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
         let mut s = String::new();
         writeln!(s, "encoder.WriteMapSize({})", fields.len()).unwrap();
         for field in fields.iter() {
             let (field_name, ser_name) = self.get_field_name_and_ser_name(field)?;
-            if id.shape_name().to_string() == "HttpRequest" {
-                eprintln!("HttpRequest field:{} ser_name:{}", &field_name, &ser_name);
-            }
             writeln!(s, "encoder.WriteString(\"{}\")", &ser_name).unwrap();
             let field_val = self.value_encoder_msgpack(
                 field.target(),
                 &format!("{}.{}", val, &field_name),
                 "encoder",
+                fn_type,
             )?;
             if is_optional_type(field) && zero_of(field.target(), None) == "nil" {
                 writeln!(
@@ -1330,7 +1380,13 @@ impl<'model> GoCodeGen<'model> {
     }
 
     /// Generates statements to encode the shape.
-    fn shape_encoder_msgpack(&self, id: &ShapeID, kind: &ShapeKind, val: &str) -> Result<String> {
+    fn shape_encoder_msgpack(
+        &self,
+        id: &ShapeID,
+        kind: &ShapeKind,
+        val: &str,
+        fn_type: &str,
+    ) -> Result<String> {
         let s = match kind {
             ShapeKind::Simple(simple) => match simple {
                 Simple::Blob => encode_alias!(id, val, SHAPE_BLOB, "ByteArray", "[]byte"),
@@ -1365,8 +1421,18 @@ impl<'model> GoCodeGen<'model> {
                     &key_var,
                     &val_var,
                     val,
-                    &self.value_encoder_msgpack(map.key().target(), &key_var, "encoder")?,
-                    &self.value_encoder_msgpack(map.value().target(), &val_var, "encoder")?,
+                    &self.value_encoder_msgpack(
+                        map.key().target(),
+                        &key_var,
+                        "encoder",
+                        fn_type
+                    )?,
+                    &self.value_encoder_msgpack(
+                        map.value().target(),
+                        &val_var,
+                        "encoder",
+                        fn_type
+                    )?,
                 )
             }
             ShapeKind::List(list) => {
@@ -1381,7 +1447,12 @@ impl<'model> GoCodeGen<'model> {
                     val,
                     &item_var,
                     val,
-                    &self.value_encoder_msgpack(list.member().target(), &item_var, "encoder",)?
+                    &self.value_encoder_msgpack(
+                        list.member().target(),
+                        &item_var,
+                        "encoder",
+                        fn_type
+                    )?
                 )
             }
             ShapeKind::Set(set) => {
@@ -1397,13 +1468,14 @@ impl<'model> GoCodeGen<'model> {
                     set.member().target(),
                     &item_var,
                     "encoder",
+                    fn_type,
                 )?);
                 s.push_str("\n}\n");
                 s
             }
             ShapeKind::Structure(struct_) => {
                 if id != crate::model::unit_shape() {
-                    self.struct_encode_msgpack(id, struct_, val)?
+                    self.struct_encode_msgpack(id, struct_, val, fn_type)?
                 } else {
                     "encoder.WriteNil()".to_string()
                 }
@@ -1507,8 +1579,16 @@ impl<'model> GoCodeGen<'model> {
                         &val_type,
                         &key_type,
                         &val_type,
-                        &self.value_decoder_msgpack(map.key().target(), DecodeRef::Plain)?,
-                        &self.value_decoder_msgpack(map.value().target(), DecodeRef::Plain)?,
+                        &self.value_decoder_msgpack(
+                            map.key().target(),
+                            DecodeRef::Plain,
+                            fn_type
+                        )?,
+                        &self.value_decoder_msgpack(
+                            map.value().target(),
+                            DecodeRef::Plain,
+                            fn_type
+                        )?,
                     ),
                     id.clone(),
                 )
@@ -1585,7 +1665,13 @@ impl<'model> GoCodeGen<'model> {
     }
 
     /// write statement(s) to encode an object in msgpack
-    pub(crate) fn value_encoder_msgpack(&self, id: &ShapeID, val: &str, e: &str) -> Result<String> {
+    pub(crate) fn value_encoder_msgpack(
+        &self,
+        id: &ShapeID,
+        val: &str,
+        e: &str,
+        fn_type: &str,
+    ) -> Result<String> {
         let name = id.shape_name().to_string();
         let stmt = if id.namespace() == prelude_namespace_id() {
             match name.as_ref() {
@@ -1602,7 +1688,7 @@ impl<'model> GoCodeGen<'model> {
                 SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => {
                     format!("{}.WriteFloat64({})", e, val)
                 }
-                SHAPE_TIMESTAMP => format!("{}.Encode({})", val, e),
+                SHAPE_TIMESTAMP => format!("{}.Encode{}({})", val, fn_type, e),
                 //SHAPE_DOCUMENT => todo!(),
                 //SHAPE_BIGINTEGER => todo!(),
                 //SHAPE_BIGDECIMAL => todo!(),
@@ -1620,16 +1706,21 @@ impl<'model> GoCodeGen<'model> {
                 b"I8" => format!("{}.WriteInt8({})", e, val),
                 b"F64" => format!("{}.WriteFloat64({})", e, val),
                 b"F32" => format!("{}.WriteFloat32({})", e, val),
-                _ => format!("{}.Encode({})", val, e,),
+                _ => format!("{}.Encode{}({})", val, fn_type, e,),
             }
         } else {
-            format!("{}.Encode({})", val, e)
+            format!("{}.Encode{}({})", val, fn_type, e)
         };
         Ok(stmt)
     }
 
     /// write statement(s) to encode an object in msgpack
-    pub(crate) fn value_decoder_msgpack(&self, id: &ShapeID, d_byref: DecodeRef) -> Result<String> {
+    pub(crate) fn value_decoder_msgpack(
+        &self,
+        id: &ShapeID,
+        d_byref: DecodeRef,
+        fn_type: &str,
+    ) -> Result<String> {
         let name = id.shape_name().to_string();
         let stmt = if id.namespace() == prelude_namespace_id() {
             match name.as_ref() {
@@ -1661,18 +1752,20 @@ impl<'model> GoCodeGen<'model> {
                 b"F64" => "d.ReadFloat64()".into(),
                 b"F32" => "d.ReadFloat32()".into(),
                 _ => format!(
-                    "{}Decode{}({})",
+                    "{}Decode{}{}({})",
                     &self.import_core,
                     crate::strings::to_pascal_case(&id.shape_name().to_string()),
                     &d_byref,
+                    fn_type,
                 ),
             }
         } else {
             format!(
-                "{}Decode{}({})",
+                "{}Decode{}{}({})",
                 self.get_crate_path(id)?,
                 crate::strings::to_pascal_case(&id.shape_name().to_string()),
                 &d_byref,
+                fn_type,
             )
         };
         Ok(stmt)
