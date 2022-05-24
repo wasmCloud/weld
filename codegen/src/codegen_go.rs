@@ -55,10 +55,14 @@ pub(crate) enum DecodeRef {
 }
 impl fmt::Display for DecodeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            DecodeRef::Plain => "d",
-            DecodeRef::ByRef => "&d",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                DecodeRef::Plain => "d",
+                DecodeRef::ByRef => "&d",
+            }
+        )
     }
 }
 
