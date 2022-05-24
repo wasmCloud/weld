@@ -85,10 +85,7 @@ pub trait ProviderHandler: Sync {
     /// Default implementation always returns healthy
     #[allow(unused_variables)]
     async fn health_request(&self, arg: &HealthCheckRequest) -> RpcResult<HealthCheckResponse> {
-        Ok(HealthCheckResponse {
-            healthy: true,
-            message: None,
-        })
+        Ok(HealthCheckResponse { healthy: true, message: None })
     }
 
     /// Handle system shutdown message
@@ -175,12 +172,9 @@ impl HostBridge {
             }
         };
         // Connect to nats
-        nats_opts
-            .max_reconnects(None)
-            .connect(nats_addr)
-            .map_err(|e| {
-                RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
-            })
+        nats_opts.max_reconnects(None).connect(nats_addr).map_err(|e| {
+            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+        })
     }
 
     pub(crate) fn new_client(
@@ -198,9 +192,7 @@ impl HostBridge {
             &host_data.lattice_rpc_prefix,
             key,
             host_data.host_id.clone(),
-            host_data
-                .default_rpc_timeout_ms
-                .map(|ms| Duration::from_millis(ms as u64)),
+            host_data.default_rpc_timeout_ms.map(|ms| Duration::from_millis(ms as u64)),
         );
 
         Ok(HostBridge {
@@ -595,11 +587,7 @@ impl HostBridge {
             error!(error = %e, "got error during provider shutdown processing");
         }
         // send ack to host
-        if let Some(crate::anats::Message {
-            reply: Some(reply_to),
-            ..
-        }) = msg.as_ref()
-        {
+        if let Some(crate::anats::Message { reply: Some(reply_to), .. }) = msg.as_ref() {
             let data = b"shutting down".to_vec();
             if let Err(e) = self.rpc_client().publish(reply_to, data).await {
                 error!(error = %e, "failed to send shutdown ack");
@@ -772,10 +760,7 @@ async fn publish_invocation_response(
                 ..response
             }
         } else {
-            InvocationResponse {
-                content_length,
-                ..response
-            }
+            InvocationResponse { content_length, ..response }
         }
     };
 
@@ -827,11 +812,7 @@ impl<'send> ProviderTransport<'send> {
                 .map(|t| Duration::from_millis(t as u64))
                 .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
         }));
-        Self {
-            bridge,
-            ld,
-            timeout,
-        }
+        Self { bridge, ld, timeout }
     }
 }
 
@@ -858,10 +839,7 @@ impl<'send> Transport for ProviderTransport<'send> {
                     .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
             }
         };
-        self.bridge
-            .rpc_client()
-            .send_timeout(origin, target, req, timeout)
-            .await
+        self.bridge.rpc_client().send_timeout(origin, target, req, timeout).await
     }
 
     fn set_timeout(&self, interval: Duration) {

@@ -3,7 +3,6 @@
 //! This crate provides code generation and runtime support for wasmcloud rpc messages
 //! used by [wasmcloud](https://wasmcloud.dev) actors and capability providers.
 //!
-#![feature(backtrace)]
 
 mod timestamp;
 // re-export Timestamp
@@ -183,10 +182,7 @@ pub mod core {
                 format!(
                     "{}://{}/{}/{}",
                     URL_SCHEME,
-                    self.contract_id
-                        .replace(':', "/")
-                        .replace(' ', "_")
-                        .to_lowercase(),
+                    self.contract_id.replace(':', "/").replace(' ', "_").to_lowercase(),
                     self.link_name.replace(' ', "_").to_lowercase(),
                     self.public_key
                 )

@@ -3,13 +3,12 @@
 // namespace: org.wasmcloud.model
 
 #[allow(unused_imports)]
-use serde::{Deserialize, Serialize};
-
-#[allow(unused_imports)]
 use crate::{
     cbor::{Decoder, Encoder, Write},
     error::{RpcError, RpcResult},
 };
+#[allow(unused_imports)]
+use serde::{Deserialize, Serialize};
 
 #[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";

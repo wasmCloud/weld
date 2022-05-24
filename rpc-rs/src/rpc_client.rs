@@ -150,8 +150,7 @@ impl RpcClient {
     where
         Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true, self.timeout)
-            .await
+        self.inner_rpc(origin, target, message, true, self.timeout).await
     }
 
     /// Send a wasmbus rpc message, with a timeout.
@@ -170,8 +169,7 @@ impl RpcClient {
     where
         Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true, Some(timeout))
-            .await
+        self.inner_rpc(origin, target, message, true, Some(timeout)).await
     }
 
     /// Send a wasmbus rpc message without waiting for response.

@@ -3,14 +3,6 @@
 // namespace: org.wasmcloud.core
 
 #[allow(unused_imports)]
-use std::{borrow::Borrow, borrow::Cow, io::Write, string::ToString};
-
-#[allow(unused_imports)]
-use async_trait::async_trait;
-#[allow(unused_imports)]
-use serde::{Deserialize, Serialize};
-
-#[allow(unused_imports)]
 use crate::{
     //cbor::*,
     common::{
@@ -20,6 +12,12 @@ use crate::{
     error::{RpcError, RpcResult},
     Timestamp,
 };
+#[allow(unused_imports)]
+use async_trait::async_trait;
+#[allow(unused_imports)]
+use serde::{Deserialize, Serialize};
+#[allow(unused_imports)]
+use std::{borrow::Borrow, borrow::Cow, io::Write, string::ToString};
 
 #[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";
