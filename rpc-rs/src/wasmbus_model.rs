@@ -3,16 +3,19 @@
 // namespace: org.wasmcloud.model
 
 #[allow(unused_imports)]
+use serde::{Deserialize, Serialize};
+
+#[allow(unused_imports)]
 use crate::{
     cbor::{Decoder, Encoder, Write},
     error::{RpcError, RpcResult},
 };
-#[allow(unused_imports)]
-use serde::{Deserialize, Serialize};
+
 #[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
+/// This declaration supports code generations and is not part of an actor or provider sdk
 pub type CapabilityContractId = String;
 
 // Encode CapabilityContractId as CBOR and append to output stream
@@ -188,6 +191,7 @@ pub fn decode_i8(d: &mut crate::cbor::Decoder<'_>) -> Result<I8, RpcError> {
     Ok(__result)
 }
 /// list of identifiers
+/// This declaration supports code generations and is not part of an actor or provider sdk
 pub type IdentifierList = Vec<String>;
 
 // Encode IdentifierList as CBOR and append to output stream

@@ -3,6 +3,14 @@
 // namespace: org.wasmcloud.core
 
 #[allow(unused_imports)]
+use std::{borrow::Borrow, borrow::Cow, io::Write, string::ToString};
+
+#[allow(unused_imports)]
+use async_trait::async_trait;
+#[allow(unused_imports)]
+use serde::{Deserialize, Serialize};
+
+#[allow(unused_imports)]
 use crate::{
     //cbor::*,
     common::{
@@ -12,12 +20,6 @@ use crate::{
     error::{RpcError, RpcResult},
     Timestamp,
 };
-#[allow(unused_imports)]
-use async_trait::async_trait;
-#[allow(unused_imports)]
-use serde::{Deserialize, Serialize};
-#[allow(unused_imports)]
-use std::{borrow::Borrow, borrow::Cow, io::Write, string::ToString};
 
 #[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";
@@ -322,9 +324,9 @@ pub struct HostData {
     /// without an actor context
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_json: Option<String>,
-    /// Optional. Default RPC timeout in milliseconds. Default = 2000
+    /// Host-wide default RPC timeout for rpc messages, in milliseconds.  Defaults to 2000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_rpc_timeout_ms: Option<u32>,
+    pub default_rpc_timeout_ms: Option<u64>,
 }
 
 // Encode HostData as CBOR and append to output stream
@@ -356,7 +358,7 @@ where
         e.null()?;
     }
     if let Some(val) = val.default_rpc_timeout_ms.as_ref() {
-        e.u32(*val)?;
+        e.u64(*val)?;
     } else {
         e.null()?;
     }
@@ -380,7 +382,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
         let mut link_definitions: Option<ActorLinks> = None;
         let mut cluster_issuers: Option<ClusterIssuers> = None;
         let mut config_json: Option<Option<String>> = Some(None);
-        let mut default_rpc_timeout_ms: Option<Option<u32>> = Some(None);
+        let mut default_rpc_timeout_ms: Option<Option<u64>> = Some(None);
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -432,7 +434,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             d.skip()?;
                             Some(None)
                         } else {
-                            Some(Some(d.u32()?))
+                            Some(Some(d.u64()?))
                         }
                     }
 
@@ -480,7 +482,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             d.skip()?;
                             Some(None)
                         } else {
-                            Some(Some(d.u32()?))
+                            Some(Some(d.u64()?))
                         }
                     }
                     _ => d.skip()?,
@@ -648,6 +650,10 @@ pub struct Invocation {
     /// total message size (optional)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_length: Option<u64>,
+    /// Open Telemetry tracing support
+    #[serde(rename = "traceContext")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<TraceContext>,
 }
 
 // Encode Invocation as CBOR and append to output stream
@@ -660,7 +666,7 @@ pub fn encode_invocation<W: crate::cbor::Write>(
 where
     <W as crate::cbor::Write>::Error: std::fmt::Display,
 {
-    e.array(8)?;
+    e.array(9)?;
     encode_wasm_cloud_entity(e, &val.origin)?;
     encode_wasm_cloud_entity(e, &val.target)?;
     e.str(&val.operation)?;
@@ -670,6 +676,11 @@ where
     e.str(&val.host_id)?;
     if let Some(val) = val.content_length.as_ref() {
         e.u64(*val)?;
+    } else {
+        e.null()?;
+    }
+    if let Some(val) = val.trace_context.as_ref() {
+        encode_trace_context(e, val)?;
     } else {
         e.null()?;
     }
@@ -688,6 +699,7 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
         let mut encoded_claims: Option<String> = None;
         let mut host_id: Option<String> = None;
         let mut content_length: Option<Option<u64>> = Some(None);
+        let mut trace_context: Option<Option<TraceContext>> = Some(None);
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -725,6 +737,16 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                             Some(Some(d.u64()?))
                         }
                     }
+                    8 => {
+                        trace_context = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(decode_trace_context(d).map_err(|e| {
+                                format!("decoding 'org.wasmcloud.core#TraceContext': {}", e)
+                            })?))
+                        }
+                    }
 
                     _ => d.skip()?,
                 }
@@ -754,6 +776,16 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                             Some(None)
                         } else {
                             Some(Some(d.u64()?))
+                        }
+                    }
+                    "traceContext" => {
+                        trace_context = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(decode_trace_context(d).map_err(|e| {
+                                format!("decoding 'org.wasmcloud.core#TraceContext': {}", e)
+                            })?))
                         }
                     }
                     _ => d.skip()?,
@@ -817,6 +849,7 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                 ));
             },
             content_length: content_length.unwrap(),
+            trace_context: trace_context.unwrap(),
         }
     };
     Ok(__result)
@@ -962,6 +995,7 @@ pub fn decode_invocation_response(
 }
 /// Link definition for binding actor to provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct LinkDefinition {
     /// actor public key
     #[serde(default)]
@@ -1134,6 +1168,45 @@ pub fn decode_link_settings(d: &mut crate::cbor::Decoder<'_>) -> Result<LinkSett
     };
     Ok(__result)
 }
+/// Environment settings for initializing a capability provider
+pub type TraceContext = std::collections::HashMap<String, String>;
+
+// Encode TraceContext as CBOR and append to output stream
+#[doc(hidden)]
+#[allow(unused_mut)]
+pub fn encode_trace_context<W: crate::cbor::Write>(
+    mut e: &mut crate::cbor::Encoder<W>,
+    val: &TraceContext,
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
+    e.map(val.len() as u64)?;
+    for (k, v) in val {
+        e.str(k)?;
+        e.str(v)?;
+    }
+    Ok(())
+}
+
+// Decode TraceContext from cbor input stream
+#[doc(hidden)]
+pub fn decode_trace_context(d: &mut crate::cbor::Decoder<'_>) -> Result<TraceContext, RpcError> {
+    let __result = {
+        {
+            let map_len = d.fixed_map()? as usize;
+            let mut m: std::collections::HashMap<String, String> =
+                std::collections::HashMap::with_capacity(map_len);
+            for _ in 0..map_len {
+                let k = d.str()?.to_string();
+                let v = d.str()?.to_string();
+                m.insert(k, v);
+            }
+            m
+        }
+    };
+    Ok(__result)
+}
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WasmCloudEntity {
     #[serde(default)]
@@ -1256,8 +1329,10 @@ pub trait ActorReceiver: MessageDispatch + Actor {
             "HealthRequest" => {
                 let value: HealthCheckRequest = crate::common::deserialize(&message.arg)
                     .map_err(|e| RpcError::Deser(format!("'HealthCheckRequest': {}", e)))?;
+
                 let resp = Actor::health_request(self, ctx, &value).await?;
                 let buf = crate::common::serialize(&resp)?;
+
                 Ok(Message {
                     method: "Actor.HealthRequest",
                     arg: Cow::Owned(buf),
@@ -1319,6 +1394,7 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender
         arg: &HealthCheckRequest,
     ) -> RpcResult<HealthCheckResponse> {
         let buf = crate::common::serialize(arg)?;
+
         let resp = self
             .transport
             .send(
