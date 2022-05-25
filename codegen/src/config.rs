@@ -48,16 +48,20 @@ impl std::str::FromStr for OutputLanguage {
 
 impl fmt::Display for OutputLanguage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            OutputLanguage::Poly => "Poly",
-            OutputLanguage::Html => "Html",
-            OutputLanguage::Rust => "Rust",
-            OutputLanguage::AssemblyScript => "AssemblyScript",
-            OutputLanguage::TinyGo => "TinyGo",
-            OutputLanguage::Go => "Go",
-            OutputLanguage::Python => "Python",
-            OutputLanguage::Clang => "Clang",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                OutputLanguage::Poly => "Poly",
+                OutputLanguage::Html => "Html",
+                OutputLanguage::Rust => "Rust",
+                OutputLanguage::AssemblyScript => "AssemblyScript",
+                OutputLanguage::TinyGo => "TinyGo",
+                OutputLanguage::Go => "Go",
+                OutputLanguage::Python => "Python",
+                OutputLanguage::Clang => "Clang",
+            }
+        )
     }
 }
 
@@ -147,10 +151,14 @@ impl ModelSource {
 
 impl fmt::Display for ModelSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            ModelSource::Url { url, files: _ } => format!("url({})", url),
-            ModelSource::Path { path, files: _ } => format!("path({})", path.display()),
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                ModelSource::Url { url, files: _ } => format!("url({})", url),
+                ModelSource::Path { path, files: _ } => format!("path({})", path.display()),
+            }
+        )
     }
 }
 
