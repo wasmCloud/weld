@@ -26,7 +26,8 @@ use crate::wasmbus_model::Wasmbus;
 use crate::{
     config::{LanguageConfig, OutputLanguage},
     error::{print_warning, Error, Result},
-    gen::{CodeGen, SourceFormatter},
+    format::{self, SourceFormatter},
+    gen::CodeGen,
     model::{
         get_operation, get_sorted_fields, get_trait, is_opt_namespace, value_to_json,
         wasmcloud_core_namespace, wasmcloud_model_namespace, CommentKind, PackageName, Ty,
@@ -267,8 +268,13 @@ impl<'model> CodeGen for GoCodeGen<'model> {
         Ok(())
     }
 
-    fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(crate::format::GoSourceFormatter::default()))
+    /// Set up go formatter based on 'tinygo.formatter' settings in codegen.toml
+    fn source_formatter(&self, mut args: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
+        if args.is_empty() {
+            return Err(Error::Formatter("missing tinygo.formatter setting".into()));
+        }
+        let program = args.remove(0);
+        Ok(Box::new(GoSourceFormatter { program, args }))
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -554,7 +560,7 @@ impl<'model> GoCodeGen<'model> {
                   if err != nil {{
                     return {},err
                   }}
-                  return {},nil "#,
+                  return {},nil"#,
                     decode_fn,
                     zero_of(&base_shape, Some(kind)), // not needed anymore
                     if &base_shape != id {
@@ -567,6 +573,7 @@ impl<'model> GoCodeGen<'model> {
                     }
                 )
             }
+            .trim_end_matches('\n')
         )
         .unwrap();
         Ok(())
@@ -603,16 +610,6 @@ impl<'model> GoCodeGen<'model> {
         if traits.get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap()).is_some() {
             self.write_comment(w, CommentKind::Documentation, "@unstable");
         }
-    }
-
-    /// field type, wrapped with Option if field is not required
-    pub(crate) fn field_type_string(&self, field: &MemberShape) -> Result<String> {
-        let target = field.target();
-        self.type_string(if is_optional_type(field) {
-            Ty::Opt(target)
-        } else {
-            Ty::Shape(target)
-        })
     }
 
     /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
@@ -788,13 +785,17 @@ impl<'model> GoCodeGen<'model> {
         for member in fields.iter() {
             self.apply_documentation_traits(w, member.id(), member.traits());
             let (field_name, _ser_name) = self.get_field_name_and_ser_name(member)?;
-            //let field_tags = format!(" `json:\"{}\"`", ser_name);
+            let target = member.target();
             let field_tags = "";
             writeln!(
                 w,
                 "  {} {} {}",
                 &field_name,
-                self.field_type_string(member)?,
+                self.type_string(if is_optional_field(member, self.shape_kind(target)) {
+                    Ty::Ptr(target)
+                } else {
+                    Ty::Shape(target)
+                })?,
                 field_tags,
             )
             .unwrap();
@@ -1154,7 +1155,7 @@ impl<'model> GoCodeGen<'model> {
             )
             .unwrap();
             if let Some(op_output) = op.output() {
-                let out_kind = self.model.unwrap().shape(op_output).map(|s| s.body());
+                let out_kind = self.shape_kind(op_output);
                 writeln!(
                     w,
                     r#"d := {}.NewDecoder(out_buf)
@@ -1313,7 +1314,7 @@ impl<'model> GoCodeGen<'model> {
                 "encoder",
                 has_cbor,
             )?;
-            if is_optional_type(field) && zero_of(field.target(), None) == "nil" {
+            if is_optional_field(field, self.shape_kind(field.target())) {
                 writeln!(
                     s,
                     r#"if {}.{} == nil {{
@@ -1364,15 +1365,26 @@ impl<'model> GoCodeGen<'model> {
         .unwrap();
         for field in fields.iter() {
             let (field_name, ser_name) = self.get_field_name_and_ser_name(field)?;
-            writeln!(
-                s,
-                r#" case "{}":
-                        val.{},err = {}"#,
-                ser_name,
-                &field_name,
-                &self.value_decoder(field.target(), DecodeRef::Plain, has_cbor)?,
-            )
-            .unwrap();
+            writeln!(s, "case \"{}\":", ser_name).unwrap();
+            if is_optional_field(field, self.shape_kind(field.target())) {
+                writeln!(
+                    s,
+                    r#"fval,err := {}
+                  if err != nil {{ return val, err }}
+                  val.{} = &fval"#,
+                    &self.value_decoder(field.target(), DecodeRef::Plain, has_cbor)?,
+                    &field_name,
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    s,
+                    r#"val.{},err = {}"#,
+                    &field_name,
+                    &self.value_decoder(field.target(), DecodeRef::Plain, has_cbor)?,
+                )
+                .unwrap();
+            }
         }
         writeln!(
             s,
@@ -1409,9 +1421,19 @@ impl<'model> GoCodeGen<'model> {
                 Simple::Float => encode_alias!(id, val, SHAPE_FLOAT, "Float32", "float32"),
                 Simple::Double => encode_alias!(id, val, SHAPE_DOUBLE, "Float64", "float64"),
                 Simple::Timestamp => {
-                    format!("{}EncodeTimestamp(encoder,{}))", &self.import_core, val)
+                    format!(
+                        "{}{}EncodeTimestamp(encoder,{}))",
+                        &self.import_core,
+                        codec_pfx(has_cbor),
+                        val
+                    )
                 }
-                Simple::Document => format!("{}.EncodeDocument({}))", &self.import_core, val),
+                Simple::Document => format!(
+                    "{}.{}EncodeDocument({}))",
+                    &self.import_core,
+                    codec_pfx(has_cbor),
+                    val
+                ),
                 Simple::BigInteger => todo!(),
                 Simple::BigDecimal => todo!(),
             },
@@ -1748,8 +1770,18 @@ impl<'model> GoCodeGen<'model> {
                 SHAPE_LONG | SHAPE_PRIMITIVELONG => "d.ReadUint64()".into(),
                 SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "d.ReadFloat32()".into(),
                 SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "d.ReadFloat64()".into(),
-                SHAPE_TIMESTAMP => format!("{}DecodeTimestamp({})", &self.import_core, &d_byref),
-                SHAPE_DOCUMENT => format!("{}DecodeDocument({})", &self.import_core, &d_byref),
+                SHAPE_TIMESTAMP => format!(
+                    "{}{}DecodeTimestamp({})",
+                    &self.import_core,
+                    codec_pfx(has_cbor),
+                    &d_byref
+                ),
+                SHAPE_DOCUMENT => format!(
+                    "{}{}DecodeDocument({})",
+                    &self.import_core,
+                    codec_pfx(has_cbor),
+                    &d_byref
+                ),
                 //SHAPE_BIGINTEGER => todo!(),
                 //SHAPE_BIGDECIMAL => todo!(),
                 _ => return Err(Error::UnsupportedType(name)),
@@ -1785,18 +1817,16 @@ impl<'model> GoCodeGen<'model> {
         };
         Ok(stmt)
     }
+
+    fn shape_kind(&self, id: &ShapeID) -> Option<&ShapeKind> {
+        self.model.unwrap().shape(id).map(|ts| ts.body())
+    }
 } // impl GoCodeGen
 
-/// is_optional_type determines whether the field should be wrapped in Option<>
-/// the value is true if it has an explicit `box` trait, or if it's
-/// un-annotated and not one of (boolean, byte, short, integer, long, float, double)
-pub(crate) fn is_optional_type(field: &MemberShape) -> bool {
-    field.is_boxed()
-        || (!field.is_required()
-            && ![
-                "Boolean", "Byte", "Short", "Integer", "Long", "Float", "Double",
-            ]
-            .contains(&field.target().shape_name().to_string().as_str()))
+/// is_optional_type determines whether the field should be declared as *Field in its struct.
+/// the value is true if it is nillable and either isn't required or has an explicit `box` trait
+pub(crate) fn is_optional_field(field: &MemberShape, kind: Option<&ShapeKind>) -> bool {
+    (field.is_boxed() || !field.is_required()) && zero_of(field.target(), kind) == "nil"
 }
 
 /*
@@ -1821,4 +1851,28 @@ fn package_semver() {
         "package version {} has unexpected format",
         package_version
     );
+}
+
+pub struct GoSourceFormatter {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+impl SourceFormatter for GoSourceFormatter {
+    fn run(&self, source_files: &[&str]) -> Result<()> {
+        // we get an error if the files are in different packages,
+        // so run once per file in case output packages differ
+        for f in source_files {
+            // TODO(future): caller converts array of paths to array of str, and we convert back to path again.
+            // ... we could change the api to this fn to take array of Path or PathBuf instead
+            let mut args = self.args.clone();
+            let path = std::fs::canonicalize(f)?;
+            args.push(path.to_string_lossy().to_string());
+            let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            if let Err(e) = format::run_command(&self.program, &str_args) {
+                eprintln!("Warning:  formatting '{}': {}", path.display(), e);
+            }
+        }
+        Ok(())
+    }
 }
