@@ -325,6 +325,8 @@ pub struct HostData {
     /// Host-wide default RPC timeout for rpc messages, in milliseconds.  Defaults to 2000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_rpc_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub structured_logging_enabled: bool,
 }
 
 // Encode HostData as CBOR and append to output stream
@@ -337,7 +339,7 @@ pub fn encode_host_data<W: crate::cbor::Write>(
 where
     <W as crate::cbor::Write>::Error: std::fmt::Display,
 {
-    e.array(14)?;
+    e.array(15)?;
     e.str(&val.host_id)?;
     e.str(&val.lattice_rpc_prefix)?;
     e.str(&val.link_name)?;
@@ -360,6 +362,7 @@ where
     } else {
         e.null()?;
     }
+    e.bool(val.structured_logging_enabled)?;
     Ok(())
 }
 
@@ -381,6 +384,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
         let mut cluster_issuers: Option<ClusterIssuers> = None;
         let mut config_json: Option<Option<String>> = Some(None);
         let mut default_rpc_timeout_ms: Option<Option<u64>> = Some(None);
+        let mut structured_logging_enabled: Option<bool> = None;
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -435,7 +439,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             Some(Some(d.u64()?))
                         }
                     }
-
+                    14 => structured_logging_enabled = Some(d.bool()?),
                     _ => d.skip()?,
                 }
             }
@@ -483,6 +487,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             Some(Some(d.u64()?))
                         }
                     }
+                    "structuredLoggingEnabled" => structured_logging_enabled = Some(d.bool()?),
                     _ => d.skip()?,
                 }
             }
@@ -585,6 +590,14 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
             },
             config_json: config_json.unwrap(),
             default_rpc_timeout_ms: default_rpc_timeout_ms.unwrap(),
+
+            structured_logging_enabled: if let Some(__x) = structured_logging_enabled {
+                __x
+            } else {
+                return Err(RpcError::Deser(
+                    "missing field HostData.structured_logging_enabled (#14)".to_string(),
+                ));
+            },
         }
     };
     Ok(__result)

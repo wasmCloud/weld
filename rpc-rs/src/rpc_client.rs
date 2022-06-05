@@ -9,6 +9,7 @@ use std::{
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use tracing::{debug, error, instrument, trace, warn};
+use wascap::prelude::Claims;
 
 use crate::{
     chunkify,
@@ -222,7 +223,7 @@ impl RpcClient {
         current_span.record("method", &tracing::field::display(message.method));
 
         debug!("rpc_client sending");
-        let claims = wascap::prelude::Claims::<wascap::prelude::Invocation>::new(
+        let claims = Claims::<wascap::prelude::Invocation>::new(
             issuer.clone(),
             subject.clone(),
             &target_url,
@@ -233,7 +234,7 @@ impl RpcClient {
         let topic = rpc_topic(&target, &self.lattice_prefix);
         let method = message.method.to_string();
         let len = message.arg.len();
-        let chunkify = crate::chunkify::needs_chunking(len);
+        let chunkify = chunkify::needs_chunking(len);
 
         #[allow(unused_variables)]
         let (invocation, body) = {
@@ -374,6 +375,126 @@ impl RpcClient {
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))
     }
+
+    pub async fn publish_invocation_response(
+        &self,
+        reply_to: String,
+        response: InvocationResponse,
+    ) -> Result<(), String> {
+        let content_length = Some(response.msg.len() as u64);
+        let response = {
+            let inv_id = response.invocation_id.clone();
+            if chunkify::needs_chunking(response.msg.len()) {
+                let msg = response.msg;
+                let lattice = self.lattice_prefix().to_string();
+                tokio::task::spawn_blocking(move || {
+                    let ce = chunkify::chunkify_endpoint(None, lattice)
+                        .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
+                    ce.chunkify_response(&inv_id, &mut msg.as_slice())
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|je| format!("join/response-chunk: {}", je))??;
+                InvocationResponse {
+                    msg: Vec::new(),
+                    content_length,
+                    ..response
+                }
+            } else {
+                InvocationResponse { content_length, ..response }
+            }
+        };
+
+        match crate::common::serialize(&response) {
+            Ok(t) => {
+                if let Err(e) = self.publish(&reply_to, t).await {
+                    error!(
+                        %reply_to,
+                        error = %e,
+                        "failed sending rpc response",
+                    );
+                }
+            }
+            Err(e) => {
+                // extremely unlikely that InvocationResponse would fail to serialize
+                error!(error = %e, "failed serializing InvocationResponse");
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn dechunk(&self, mut inv: Invocation) -> RpcResult<Invocation> {
+        if inv.content_length.is_some() && inv.content_length.unwrap() > inv.msg.len() as u64 {
+            let inv_id = inv.id.clone();
+            let lattice = self.lattice_prefix().to_string();
+            inv.msg = tokio::task::spawn_blocking(move || {
+                let ce = chunkify::chunkify_endpoint(None, lattice)
+                    .map_err(|e| format!("connecting for de-chunkifying: {}", &e.to_string()))?;
+                ce.get_unchunkified(&inv_id).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|je| format!("join/dechunk-validate: {}", je))??;
+        }
+        Ok(inv)
+    }
+
+    /// Initial validation of received message. See provider::validate_provider_invocation for second part.
+    pub async fn validate_invocation(
+        &self,
+        inv: Invocation,
+    ) -> Result<(Invocation, Claims<wascap::jwt::Invocation>), String> {
+        let vr = wascap::jwt::validate_token::<wascap::prelude::Invocation>(&inv.encoded_claims)
+            .map_err(|e| format!("{}", e))?;
+        if vr.expired {
+            return Err("Invocation claims token expired".into());
+        }
+        if !vr.signature_valid {
+            return Err("Invocation claims signature invalid".into());
+        }
+        if vr.cannot_use_yet {
+            return Err("Attempt to use invocation before claims token allows".into());
+        }
+        let target_url = format!("{}/{}", inv.target.url(), &inv.operation);
+        let hash = invocation_hash(&target_url, &inv.origin.url(), &inv.operation, &inv.msg);
+        let claims = Claims::<wascap::prelude::Invocation>::decode(&inv.encoded_claims)
+            .map_err(|e| format!("{}", e))?;
+        let inv_claims = claims
+            .metadata
+            .as_ref()
+            .ok_or_else(|| "No wascap metadata found on claims".to_string())?;
+        if inv_claims.invocation_hash != hash {
+            return Err(format!(
+                "Invocation hash does not match signed claims hash ({} / {})",
+                inv_claims.invocation_hash, hash
+            ));
+        }
+        if !inv.host_id.starts_with('N') && inv.host_id.len() != 56 {
+            return Err(format!("Invalid host ID on invocation: '{}'", inv.host_id));
+        }
+
+        if inv_claims.target_url != target_url {
+            return Err(format!(
+                "Invocation claims and invocation target URL do not match: {} != {}",
+                &inv_claims.target_url, &target_url
+            ));
+        }
+        if inv_claims.origin_url != inv.origin.url() {
+            return Err("Invocation claims and invocation origin URL do not match".into());
+        }
+        Ok((inv, claims))
+    }
+}
+
+#[derive(Clone)]
+pub struct InvocationArg {
+    /// Sender of the message
+    pub origin: String,
+
+    /// Method name, usually of the form Service.Method
+    pub operation: String,
+
+    /// Message payload (could be empty array). May need to be serialized
+    pub arg: Vec<u8>,
 }
 
 pub(crate) fn invocation_hash(

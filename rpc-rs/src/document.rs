@@ -813,7 +813,7 @@ pub fn decode_document(d: &mut crate::cbor::Decoder<'_>) -> RpcResult<Document> 
         0 => {
             // Object
             let map_len = d.fixed_map()? as usize;
-            let mut map = std::collections::HashMap::with_capacity(map_len);
+            let mut map = HashMap::with_capacity(map_len);
             for _ in 0..map_len {
                 let k = d.str()?.to_string();
                 let v = decode_document(d)?;

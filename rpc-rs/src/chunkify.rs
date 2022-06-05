@@ -119,11 +119,7 @@ impl ChunkEndpoint {
     }
 
     /// chunkify a portion of a response
-    pub fn chunkify_response(
-        &self,
-        inv_id: &str,
-        bytes: &mut impl std::io::Read,
-    ) -> Result<(), RpcError> {
+    pub fn chunkify_response(&self, inv_id: &str, bytes: &mut impl Read) -> Result<(), RpcError> {
         self.chunkify(&format!("{}-r", inv_id), bytes)
     }
 

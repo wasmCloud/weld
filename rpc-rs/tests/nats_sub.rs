@@ -64,10 +64,7 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
                 println!("ERROR: payload on {}: {}", subject, &payload);
             }
             if let Some(reply_to) = msg.reply {
-                client
-                    .publish(&reply_to, b"ok".to_vec())
-                    .await
-                    .expect("reply");
+                client.publish(&reply_to, b"ok".to_vec()).await.expect("reply");
             }
             if payload == "exit" {
                 break;
@@ -136,10 +133,7 @@ async fn listen_queue(
             }
             if let Some(reply_to) = msg.reply {
                 debug!("listener {} replying ok", &subject);
-                client
-                    .publish(&reply_to, b"ok".to_vec())
-                    .await
-                    .expect("reply");
+                client.publish(&reply_to, b"ok".to_vec()).await.expect("reply");
             }
             if &payload == "exit" {
                 let _ = sub.unsubscribe().await;
@@ -162,10 +156,7 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
 
     let sender = make_client().await.expect("creating sender");
     sender.publish(&topic, b"abc".to_vec()).await.expect("send");
-    sender
-        .publish(&topic, b"exit".to_vec())
-        .await
-        .expect("send");
+    sender.publish(&topic, b"exit".to_vec()).await.expect("send");
     let val = l1.await.expect("join");
 
     assert_eq!(val, 1);
@@ -237,7 +228,7 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn sleep(millis: u64) {
-    tokio::time::sleep(tokio::time::Duration::from_millis(millis)).await;
+    tokio::time::sleep(Duration::from_millis(millis)).await;
 }
 
 fn check_ok(data: Vec<u8>) -> Result<(), RpcError> {

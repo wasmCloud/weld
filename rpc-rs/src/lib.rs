@@ -37,8 +37,8 @@ pub const WASMBUS_RPC_VERSION: u32 = 0;
 /// This crate's published version
 pub const WELD_CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub type CallResult = std::result::Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>>;
-pub type HandlerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Sync + Send>>;
+pub type CallResult = Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>>;
+pub type HandlerResult<T> = Result<T, Box<dyn std::error::Error + Sync + Send>>;
 pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -177,7 +177,7 @@ pub mod core {
         /// Returns URL of the entity
         pub fn url(&self) -> String {
             if self.public_key.to_uppercase().starts_with('M') {
-                format!("{}://{}", crate::core::URL_SCHEME, self.public_key)
+                format!("{}://{}", URL_SCHEME, self.public_key)
             } else {
                 format!(
                     "{}://{}/{}/{}",

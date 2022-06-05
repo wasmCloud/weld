@@ -61,7 +61,7 @@ pub trait Transport: Send {
         ctx: &Context,
         req: Message<'_>,
         opts: Option<SendOpts>,
-    ) -> std::result::Result<Vec<u8>, RpcError>;
+    ) -> Result<Vec<u8>, RpcError>;
 
     /// Sets rpc timeout
     fn set_timeout(&self, interval: std::time::Duration);
@@ -88,7 +88,7 @@ pub trait MessageDispatch {
 }
 
 /// Message encoding format
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum MessageFormat {
     Msgpack,
     Cbor,
@@ -253,11 +253,7 @@ impl<T: Transport + Sync + Send> AnySender<T> {
     }
 
     /// Send rpc with serializable payload using cbor encode/decode
-    pub async fn send_cbor<
-        'de,
-        In: crate::minicbor::Encode<()>,
-        Out: crate::cbor::MDecodeOwned<()>,
-    >(
+    pub async fn send_cbor<'de, In: minicbor::Encode<()>, Out: crate::cbor::MDecodeOwned<()>>(
         &mut self,
         ctx: &Context,
         method: &str,

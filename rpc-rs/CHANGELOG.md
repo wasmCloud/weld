@@ -31,7 +31,7 @@
 
 ### Breaking changes (since 0.6.x)
 
-- Some of the crate exported symbols have moved to sub-modules. The intent is to resolve some linking problems
+- Some of the crate's exported symbols have moved to submodules. The intent is to resolve some linking problems
   resulting from multiple inconsistent references to these symbols.
   Most of these changes will require only a recompile, for Actors and Providers 
   that import `wasmbus_rpc::actor::prelude::*` or `wasmbus_rpc::provider::prelude::*`, respectively.
