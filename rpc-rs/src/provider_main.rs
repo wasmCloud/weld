@@ -155,9 +155,9 @@ where
                 "Error starting provider: failed to initialize link {:?}",
                 &ld
             );
-            return Err(Box::new(e));
+        } else {
+            bridge.put_link(ld).await;
         }
-        bridge.put_link(ld).await;
     }
 
     // subscribe to nats topics
