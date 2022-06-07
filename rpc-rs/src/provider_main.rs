@@ -152,8 +152,8 @@ where
     for ld in initial_links.into_iter() {
         if let Err(e) = provider_dispatch.put_link(&ld).await {
             eprintln!(
-                "Error starting provider: failed to initialize link {:?}",
-                &ld
+                "Error starting provider: failed to initialize link {:?}: {:?}",
+                &ld, e
             );
         } else {
             bridge.put_link(ld).await;
