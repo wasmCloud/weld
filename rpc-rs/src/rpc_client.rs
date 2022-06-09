@@ -6,10 +6,12 @@ use std::{
     time::Duration,
 };
 
+use crate::wascap::{jwt, prelude::Claims};
+#[cfg(feature = "prometheus")]
+use prometheus::{IntCounter, Opts};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use tracing::{debug, error, instrument, trace, warn};
-use wascap::prelude::Claims;
 
 use crate::{
     chunkify,
@@ -38,18 +40,48 @@ pub(crate) const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);
 ///
 #[derive(Clone)]
 pub struct RpcClient {
-    /// sync or async nats client
-    client: crate::anats::Client,
-    /// lattice rpc prefix
-    lattice_prefix: String,
-    /// secrets for signing invocations
+    client: async_nats::Client,
     key: Arc<wascap::prelude::KeyPair>,
-    /// host id for invocations
+    /// host id (public key) for invocations
     host_id: String,
     /// timeout for rpc messages
     timeout: Option<Duration>,
+
+    #[cfg(feature = "prometheus")]
+    pub(crate) stats: Arc<RpcStats>,
 }
 
+#[cfg(feature = "prometheus")]
+#[derive(Debug)]
+pub struct RpcStats {
+    // number of rpc nats messages sent
+    pub(crate) rpc_sent: IntCounter,
+    // number of errors sending - of all types: including errors while receiving responses, and timeouts
+    pub(crate) rpc_sent_err: IntCounter,
+    // number of messages sent that required chunking
+    pub(crate) rpc_sent_chunky: IntCounter,
+    // number of responses received that were chunked
+    pub(crate) rpc_sent_resp_chunky: IntCounter,
+    // total bytes sent (chunked & not chunked). bytes are for sent requests.
+    pub(crate) rpc_sent_bytes: IntCounter,
+    // total bytes received in response to sent messages
+    pub(crate) rpc_sent_resp_bytes: IntCounter,
+    // number of timeout errors sending. Note that timeout errors are also included in rpc_sent_err
+    pub(crate) rpc_sent_timeouts: IntCounter,
+
+    // number of rpc messages received from rpc subscription
+    pub(crate) rpc_recv: IntCounter,
+    // recv errors include errors receiving subscription messages and replying to them
+    pub(crate) rpc_recv_err: IntCounter,
+    // number of rpc messages received that were chunkified
+    pub(crate) rpc_recv_chunky: IntCounter,
+    // number of rpc message responses that were chunkified
+    pub(crate) rpc_recv_resp_chunky: IntCounter,
+    // bytes received in rpc (subscription) messages
+    pub(crate) rpc_recv_bytes: IntCounter,
+    // bytes sent in response to received rpc messages
+    pub(crate) rpc_recv_resp_bytes: IntCounter,
+}
 /// Returns the rpc topic (subject) name for sending to an actor or provider.
 /// A provider entity must have the public_key and link_name fields filled in.
 /// An actor entity must have a public_key and an empty link_name.
@@ -69,46 +101,39 @@ pub fn rpc_topic(entity: &WasmCloudEntity, lattice_prefix: &str) -> String {
 
 impl RpcClient {
     /// Constructs a new RpcClient with an async nats connection.
-    /// parameters: async nats client, lattice rpc prefix (usually "default"),
+    /// parameters: async nats client, rpc timeout
     /// secret key for signing messages, host_id, and optional timeout.
     pub fn new(
-        nats: crate::anats::Client,
-        lattice_prefix: &str,
-        key: wascap::prelude::KeyPair,
+        nats: async_nats::Client,
         host_id: String,
         timeout: Option<Duration>,
+        key_pair: Arc<wascap::prelude::KeyPair>,
     ) -> Self {
-        Self::new_client(nats, lattice_prefix, key, host_id, timeout)
+        Self::new_client(nats, host_id, timeout, key_pair)
     }
 
     /// Constructs a new RpcClient with a nats connection.
     /// parameters: nats client, lattice rpc prefix (usually "default"),
     /// secret key for signing messages, host_id, and optional timeout.
     pub(crate) fn new_client(
-        nats: crate::anats::Client,
-        lattice_prefix: &str,
-        key: wascap::prelude::KeyPair,
+        nats: async_nats::Client,
         host_id: String,
         timeout: Option<Duration>,
+        key_pair: Arc<wascap::prelude::KeyPair>,
     ) -> Self {
         RpcClient {
             client: nats,
-            lattice_prefix: lattice_prefix.to_string(),
-            key: Arc::new(key),
             host_id,
             timeout,
+            #[cfg(feature = "prometheus")]
+            stats: Arc::new(RpcStats::init(key_pair.public_key())),
+            key: key_pair,
         }
     }
 
     /// convenience method for returning async client
-    /// If the client is not the correct type, returns None
-    pub fn client(&self) -> crate::anats::Client {
+    pub fn client(&self) -> async_nats::Client {
         self.client.clone()
-    }
-
-    /// returns the lattice prefix
-    pub fn lattice_prefix(&self) -> &str {
-        self.lattice_prefix.as_str()
     }
 
     /// Replace the default timeout with the specified value.
@@ -122,6 +147,7 @@ impl RpcClient {
         &self,
         origin: WasmCloudEntity,
         target: Target,
+        lattice: &str,
         method: &str,
         data: JsonValue,
     ) -> RpcResult<JsonValue>
@@ -131,14 +157,13 @@ impl RpcClient {
         Target: Into<WasmCloudEntity>,
     {
         let msg = JsonMessage(method, data).try_into()?;
-        let bytes = self.send(origin, target, msg).await?;
+        let bytes = self.send(origin, target, lattice, msg).await?;
         let resp = response_to_json::<Resp>(&bytes)?;
         Ok(resp)
     }
 
     /// Send a wasmbus rpc message by wrapping with an Invocation before sending over nats.
     /// 'target' may be &str or String for sending to an actor, or a WasmCloudEntity (for actor or provider)
-    /// If nats client is sync, this can block the current thread.
     /// If a response is not received within the default timeout, the Error RpcError::Timeout is returned.
     /// If the client timeout has been set, this call is equivalent to send_timeout passing in the
     /// default timeout.
@@ -146,31 +171,45 @@ impl RpcClient {
         &self,
         origin: WasmCloudEntity,
         target: Target,
+        lattice: &str,
         message: Message<'_>,
     ) -> RpcResult<Vec<u8>>
     where
         Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true, self.timeout).await
+        let rc = self.inner_rpc(origin, target, lattice, message, true, self.timeout).await;
+        #[cfg(feature = "prometheus")]
+        {
+            if rc.is_err() {
+                self.stats.rpc_sent_err.inc()
+            }
+        }
+        rc
     }
 
     /// Send a wasmbus rpc message, with a timeout.
     /// The rpc message is wrapped with an Invocation before sending over nats.
     /// 'target' may be &str or String for sending to an actor, or a WasmCloudEntity (for actor or provider)
-    /// If nats client is sync, this can block the current thread until either the response is received,
-    /// or the timeout expires. If the timeout expires before the response is received,
-    /// this returns Error RpcError::Timeout.
+    /// If the timeout expires before the response is received, this returns Error RpcError::Timeout.
     pub async fn send_timeout<Target>(
         &self,
         origin: WasmCloudEntity,
         target: Target,
+        lattice: &str,
         message: Message<'_>,
         timeout: Duration,
     ) -> RpcResult<Vec<u8>>
     where
         Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true, Some(timeout)).await
+        let rc = self.inner_rpc(origin, target, lattice, message, true, Some(timeout)).await;
+        #[cfg(feature = "prometheus")]
+        {
+            if rc.is_err() {
+                self.stats.rpc_sent_err.inc();
+            }
+        }
+        rc
     }
 
     /// Send a wasmbus rpc message without waiting for response.
@@ -184,13 +223,21 @@ impl RpcClient {
         &self,
         origin: WasmCloudEntity,
         target: Target,
+        lattice: &str,
         message: Message<'_>,
     ) -> RpcResult<()>
     where
         Target: Into<WasmCloudEntity>,
     {
-        let _ = self.inner_rpc(origin, target, message, false, None).await?;
-        Ok(())
+        let rc = self.inner_rpc(origin, target, lattice, message, false, None).await;
+        match rc {
+            Err(e) => {
+                #[cfg(feature = "prometheus")]
+                self.stats.rpc_sent_err.inc();
+                Err(e)
+            }
+            Ok(_) => Ok(()),
+        }
     }
 
     /// request or publish an rpc invocation
@@ -199,6 +246,7 @@ impl RpcClient {
         &self,
         origin: WasmCloudEntity,
         target: Target,
+        lattice: &str,
         message: Message<'_>,
         expect_response: bool,
         timeout: Option<Duration>,
@@ -209,21 +257,21 @@ impl RpcClient {
         let target = target.into();
         let origin_url = origin.url();
         let subject = make_uuid();
-        let issuer = &self.key.public_key();
+        let issuer = self.key.public_key();
         let raw_target_url = target.url();
         let target_url = format!("{}/{}", raw_target_url, &message.method);
 
         // Record all of the fields on the span. To avoid extra allocations, we are only going to
         // record here after we generate/derive the values
         let current_span = tracing::span::Span::current();
-        current_span.record("issuer", &tracing::field::display(issuer));
+        current_span.record("issuer", &tracing::field::display(issuer.clone()));
         current_span.record("origin_url", &tracing::field::display(&origin_url));
         current_span.record("subject", &tracing::field::display(&subject));
         current_span.record("target_url", &tracing::field::display(&raw_target_url));
         current_span.record("method", &tracing::field::display(message.method));
 
         debug!("rpc_client sending");
-        let claims = Claims::<wascap::prelude::Invocation>::new(
+        let claims = Claims::<jwt::Invocation>::new(
             issuer.clone(),
             subject.clone(),
             &target_url,
@@ -231,7 +279,7 @@ impl RpcClient {
             &invocation_hash(&target_url, &origin_url, message.method, &message.arg),
         );
 
-        let topic = rpc_topic(&target, &self.lattice_prefix);
+        let topic = rpc_topic(&target, lattice);
         let method = message.method.to_string();
         let len = message.arg.len();
         let chunkify = chunkify::needs_chunking(len);
@@ -243,7 +291,7 @@ impl RpcClient {
                 target,
                 operation: method.clone(),
                 id: subject,
-                encoded_claims: claims.encode(&self.key).unwrap(),
+                encoded_claims: claims.encode(&self.key).unwrap_or_default(),
                 host_id: self.host_id.clone(),
                 content_length: Some(len as u64),
                 ..Default::default()
@@ -260,7 +308,7 @@ impl RpcClient {
             let inv_id = invocation.id.clone();
             debug!(invocation_id = %inv_id, %len, "chunkifying invocation");
             // start chunking thread
-            let lattice = self.lattice_prefix().to_string();
+            let lattice = lattice.to_string();
             tokio::task::spawn_blocking(move || {
                 let ce = chunkify::chunkify_endpoint(None, lattice)?;
                 ce.chunkify(&inv_id, &mut body.as_slice())
@@ -279,8 +327,17 @@ impl RpcClient {
         } else {
             timeout
         };
-        trace!("rpc send");
 
+        #[cfg(feature = "prometheus")]
+        {
+            self.stats.rpc_sent.inc();
+            if let Some(len) = invocation.content_length {
+                self.stats.rpc_sent_bytes.inc_by(len);
+            }
+            if chunkify {
+                self.stats.rpc_sent_chunky.inc();
+            }
+        }
         if expect_response {
             let payload = if let Some(timeout) = timeout {
                 // if we expect a response before timeout, finish sending all chunks, then wait for response
@@ -291,6 +348,10 @@ impl RpcClient {
                         target_url, rpc_err
                     ))),
                     Err(timeout_err) => {
+                        #[cfg(feature = "prometheus")]
+                        {
+                            self.stats.rpc_sent_timeouts.inc();
+                        }
                         error!(error = %timeout_err, "rpc timeout: sending to target");
                         Err(RpcError::Timeout(format!(
                             "sending to {}: {}",
@@ -311,11 +372,21 @@ impl RpcClient {
                 })?;
             match inv_response.error {
                 None => {
+                    #[cfg(feature = "prometheus")]
+                    {
+                        if let Some(len) = inv_response.content_length {
+                            self.stats.rpc_sent_resp_bytes.inc_by(len);
+                        }
+                    }
                     // was response chunked?
                     let msg = if inv_response.content_length.is_some()
                         && inv_response.content_length.unwrap() > inv_response.msg.len() as u64
                     {
-                        let lattice = self.lattice_prefix().to_string();
+                        let lattice = lattice.to_string();
+                        #[cfg(feature = "prometheus")]
+                        {
+                            self.stats.rpc_sent_resp_chunky.inc();
+                        }
                         tokio::task::spawn_blocking(move || {
                             let ce = chunkify::chunkify_endpoint(None, lattice)?;
                             ce.get_unchunkified_response(&inv_response.invocation_id)
@@ -347,7 +418,8 @@ impl RpcClient {
     /// If this client has a default timeout, and a response is not received within
     /// the appropriate time, an error will be returned.
     pub async fn request(&self, subject: String, data: Vec<u8>) -> RpcResult<Vec<u8>> {
-        let fut = self.client.request(subject, data.into());
+        let nc = self.client();
+        let fut = nc.request(subject, data.into());
         let bytes = if let Some(timeout) = &self.timeout {
             tokio::time::timeout(*timeout, fut).await.map_err(|_| {
                 warn!(
@@ -370,7 +442,7 @@ impl RpcClient {
     /// Send a nats message with no reply-to. Do not wait for a response.
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
     pub async fn publish(&self, subject: &str, data: Vec<u8>) -> RpcResult<()> {
-        self.client
+        self.client()
             .publish(subject.to_string(), data.into())
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))
@@ -380,13 +452,18 @@ impl RpcClient {
         &self,
         reply_to: String,
         response: InvocationResponse,
+        lattice: &str,
     ) -> Result<(), String> {
         let content_length = Some(response.msg.len() as u64);
         let response = {
             let inv_id = response.invocation_id.clone();
             if chunkify::needs_chunking(response.msg.len()) {
+                #[cfg(feature = "prometheus")]
+                {
+                    self.stats.rpc_recv_resp_chunky.inc();
+                }
                 let msg = response.msg;
-                let lattice = self.lattice_prefix().to_string();
+                let lattice = lattice.to_string();
                 tokio::task::spawn_blocking(move || {
                     let ce = chunkify::chunkify_endpoint(None, lattice)
                         .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
@@ -407,7 +484,7 @@ impl RpcClient {
 
         match crate::common::serialize(&response) {
             Ok(t) => {
-                if let Err(e) = self.publish(&reply_to, t).await {
+                if let Err(e) = self.client().publish(reply_to.clone(), t.into()).await {
                     error!(
                         %reply_to,
                         error = %e,
@@ -423,10 +500,14 @@ impl RpcClient {
         Ok(())
     }
 
-    pub async fn dechunk(&self, mut inv: Invocation) -> RpcResult<Invocation> {
+    pub async fn dechunk(&self, mut inv: Invocation, lattice: &str) -> RpcResult<Invocation> {
         if inv.content_length.is_some() && inv.content_length.unwrap() > inv.msg.len() as u64 {
+            #[cfg(feature = "prometheus")]
+            {
+                self.stats.rpc_recv_chunky.inc();
+            }
             let inv_id = inv.id.clone();
-            let lattice = self.lattice_prefix().to_string();
+            let lattice = lattice.to_string();
             inv.msg = tokio::task::spawn_blocking(move || {
                 let ce = chunkify::chunkify_endpoint(None, lattice)
                     .map_err(|e| format!("connecting for de-chunkifying: {}", &e.to_string()))?;
@@ -442,8 +523,8 @@ impl RpcClient {
     pub async fn validate_invocation(
         &self,
         inv: Invocation,
-    ) -> Result<(Invocation, Claims<wascap::jwt::Invocation>), String> {
-        let vr = wascap::jwt::validate_token::<wascap::prelude::Invocation>(&inv.encoded_claims)
+    ) -> Result<(Invocation, Claims<jwt::Invocation>), String> {
+        let vr = jwt::validate_token::<jwt::Invocation>(&inv.encoded_claims)
             .map_err(|e| format!("{}", e))?;
         if vr.expired {
             return Err("Invocation claims token expired".into());
@@ -456,8 +537,8 @@ impl RpcClient {
         }
         let target_url = format!("{}/{}", inv.target.url(), &inv.operation);
         let hash = invocation_hash(&target_url, &inv.origin.url(), &inv.operation, &inv.msg);
-        let claims = Claims::<wascap::prelude::Invocation>::decode(&inv.encoded_claims)
-            .map_err(|e| format!("{}", e))?;
+        let claims =
+            Claims::<jwt::Invocation>::decode(&inv.encoded_claims).map_err(|e| format!("{}", e))?;
         let inv_claims = claims
             .metadata
             .as_ref()
@@ -565,4 +646,101 @@ where
 {
     serde_json::to_value(crate::common::deserialize::<T>(msg)?)
         .map_err(|e| RpcError::Ser(format!("response serialization : {}.", e)))
+}
+
+#[cfg(feature = "prometheus")]
+impl RpcStats {
+    fn init(public_key: String) -> RpcStats {
+        let mut map = std::collections::HashMap::new();
+        map.insert("public_key".to_string(), public_key);
+
+        RpcStats {
+            rpc_sent: IntCounter::with_opts(
+                Opts::new("rpc_sent", "number of rpc nats messages sent").const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_sent_err: IntCounter::with_opts(
+                Opts::new("rpc_sent_err", "number of errors sending rpc").const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_sent_chunky: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_sent_chunky",
+                    "number of rpc messages that were chunkified",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_sent_resp_chunky: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_sent_resp_chunky",
+                    "number of responses to sent rpc that were chunkified",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_sent_bytes: IntCounter::with_opts(
+                Opts::new("rpc_sent_bytes", "total bytes sent in rpc requests")
+                    .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_sent_resp_bytes: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_sent_resp_bytes",
+                    "total bytes sent in responses to incoming rpc",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_sent_timeouts: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_sent_timeouts",
+                    "number of rpc messages that incurred timeout error",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_recv: IntCounter::with_opts(
+                Opts::new("rpc_recv", "number of rpc messages received").const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_recv_err: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_recv_err",
+                    "number of errors encountered responding to incoming rpc",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_recv_chunky: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_recv_chunky",
+                    "number of received rpc that were chunkified",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_recv_resp_chunky: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_recv_resp_chunky",
+                    "number of chunkified responses to received rpc",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_recv_bytes: IntCounter::with_opts(
+                Opts::new("rpc_recv_bytes", "total bytes in received rpc")
+                    .const_labels(map.clone()),
+            )
+            .unwrap(),
+            rpc_recv_resp_bytes: IntCounter::with_opts(
+                Opts::new(
+                    "rpc_recv_resp_bytes",
+                    "total bytes in responses to incoming rpc",
+                )
+                .const_labels(map.clone()),
+            )
+            .unwrap(),
+        }
+    }
 }

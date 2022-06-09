@@ -2,16 +2,20 @@
 
 //! common provider wasmbus support
 //!
-use std::fmt::Formatter;
 use std::{
     borrow::Cow,
     collections::HashMap,
     convert::Infallible,
+    fmt::Formatter,
     ops::Deref,
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
+use crate::wascap::{
+    jwt,
+    prelude::{Claims, KeyPair},
+};
 use async_trait::async_trait;
 use futures::{future::JoinAll, StreamExt};
 use serde::de::DeserializeOwned;
@@ -153,6 +157,8 @@ macro_rules! process_until_quit {
 #[derive(Clone)]
 pub struct HostBridge {
     inner: Arc<HostBridgeInner>,
+    #[allow(dead_code)]
+    key: Arc<wascap::prelude::KeyPair>,
     host_data: HostData,
 }
 
@@ -185,21 +191,21 @@ impl HostBridge {
     }
 
     pub(crate) fn new_client(
-        nats: crate::anats::Client,
+        nats: async_nats::Client,
         host_data: &HostData,
     ) -> RpcResult<HostBridge> {
-        let key = if host_data.is_test() {
-            wascap::prelude::KeyPair::new_user()
+        let key = Arc::new(if host_data.is_test() {
+            KeyPair::new_user()
         } else {
-            wascap::prelude::KeyPair::from_seed(&host_data.invocation_seed)
+            KeyPair::from_seed(&host_data.invocation_seed)
                 .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
-        };
+        });
+
         let rpc_client = RpcClient::new_client(
             nats,
-            &host_data.lattice_rpc_prefix,
-            key,
             host_data.host_id.clone(),
             host_data.default_rpc_timeout_ms.map(|ms| Duration::from_millis(ms as u64)),
+            key.clone(),
         );
 
         Ok(HostBridge {
@@ -208,6 +214,7 @@ impl HostBridge {
                 rpc_client,
                 lattice_prefix: host_data.lattice_rpc_prefix.clone(),
             }),
+            key,
             host_data: host_data.clone(),
         })
     }
@@ -240,7 +247,7 @@ impl Deref for HostBridge {
 /// Initialize host bridge for use by wasmbus-test-util.
 /// The purpose is so that test code can get the nats configuration
 /// This is never called inside a provider process (and will fail if a provider calls it)
-pub fn init_host_bridge_for_test(nc: crate::anats::Client, host_data: &HostData) -> RpcResult<()> {
+pub fn init_host_bridge_for_test(nc: async_nats::Client, host_data: &HostData) -> RpcResult<()> {
     let hb = HostBridge::new_client(nc, host_data)?;
     crate::provider_main::set_host_bridge(hb)
         .map_err(|_| RpcError::Other("HostBridge already initialized".to_string()))?;
@@ -276,11 +283,7 @@ impl HostBridge {
     // parse incoming subscription message
     // if it fails deserialization, we can't really respond;
     // so log the error
-    fn parse_msg<T: DeserializeOwned>(
-        &self,
-        msg: &crate::anats::Message,
-        topic: &str,
-    ) -> Option<T> {
+    fn parse_msg<T: DeserializeOwned>(&self, msg: &async_nats::Message, topic: &str) -> Option<T> {
         match if self.host_data.is_test() {
             serde_json::from_slice(&msg.payload).map_err(|e| RpcError::Deser(e.to_string()))
         } else {
@@ -323,12 +326,18 @@ impl HostBridge {
         &'static self,
         provider: P,
         shutdown_tx: &tokio::sync::broadcast::Sender<bool>,
+        lattice: &str,
     ) -> JoinAll<tokio::task::JoinHandle<RpcResult<()>>>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
+        let lattice = lattice.to_string();
         futures::future::join_all(vec![
-            tokio::task::spawn(self.subscribe_rpc(provider.clone(), shutdown_tx.subscribe())),
+            tokio::task::spawn(self.subscribe_rpc(
+                provider.clone(),
+                shutdown_tx.subscribe(),
+                lattice,
+            )),
             tokio::task::spawn(self.subscribe_link_put(provider.clone(), shutdown_tx.subscribe())),
             tokio::task::spawn(self.subscribe_link_del(provider.clone(), shutdown_tx.subscribe())),
             tokio::task::spawn(self.subscribe_shutdown(provider.clone(), shutdown_tx.clone())),
@@ -353,12 +362,13 @@ impl HostBridge {
     }
 
     /// Subscribe to a nats topic for rpc messages.
-    /// This method starts a separate async task and returns immeditely.
+    /// This method starts a separate async task and returns immediately.
     /// It will exit if the nats client disconnects, or if a signal is received on the quit channel.
     pub async fn subscribe_rpc<P>(
         &self,
         provider: P,
         mut quit: tokio::sync::broadcast::Receiver<bool>,
+        lattice: String,
     ) -> RpcResult<()>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
@@ -393,7 +403,7 @@ impl HostBridge {
                                     let _ = this.rpc_client().publish_invocation_response(reply, InvocationResponse{
                                         error: Some(format!("deser error: {}", error)),
                                         ..Default::default()
-                                    }).await;
+                                    }, &lattice ).await;
                                 }
                                 continue;
                             }
@@ -426,7 +436,7 @@ impl HostBridge {
                         };
                         if let Some(reply) = msg.reply {
                             // send reply
-                            let _ = this.rpc_client().publish_invocation_response(reply, resp).await;
+                            let _ = this.rpc_client().publish_invocation_response(reply, resp, &lattice).await;
                         }
                     }
                 }
@@ -440,10 +450,18 @@ impl HostBridge {
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
-        let inv = self.rpc_client.dechunk(inv).await?;
+        let lattice = &self.host_data.lattice_rpc_prefix;
+        #[cfg(feature = "prometheus")]
+        {
+            if let Some(len) = inv.content_length {
+                self.rpc_client.stats.rpc_recv_bytes.inc_by(len);
+            }
+            self.rpc_client.stats.rpc_recv.inc();
+        }
+        let inv = self.rpc_client().dechunk(inv, lattice).await?;
         let (inv, claims) = self.rpc_client.validate_invocation(inv).await?;
         self.validate_provider_invocation(&inv, &claims).await?;
-        provider
+        let rc = provider
             .dispatch(
                 &Context {
                     actor: Some(inv.origin.public_key.clone()),
@@ -455,7 +473,17 @@ impl HostBridge {
                 },
             )
             .await
-            .map(|m| m.arg.to_vec())
+            .map(|m| m.arg.to_vec());
+        #[cfg(feature = "prometheus")]
+        match &rc {
+            Err(_) => {
+                self.rpc_client.stats.rpc_recv_err.inc();
+            }
+            Ok(vec) => {
+                self.rpc_client.stats.rpc_recv_resp_bytes.inc_by(vec.len() as u64);
+            }
+        }
+        rc
     }
 
     async fn subscribe_shutdown<P>(
@@ -490,7 +518,7 @@ impl HostBridge {
             error!(error = %e, "got error during provider shutdown processing");
         }
         // send ack to host
-        if let Some(crate::anats::Message { reply: Some(reply_to), .. }) = msg.as_ref() {
+        if let Some(async_nats::Message { reply: Some(reply_to), .. }) = msg.as_ref() {
             let data = b"shutting down".to_vec();
             if let Err(e) = self.rpc_client().publish(reply_to, data).await {
                 error!(error = %e, "failed to send shutdown ack");
@@ -640,7 +668,7 @@ impl HostBridge {
     async fn validate_provider_invocation(
         &self,
         inv: &Invocation,
-        claims: &wascap::prelude::Claims<wascap::jwt::Invocation>,
+        claims: &Claims<jwt::Invocation>,
     ) -> Result<(), String> {
         if !self.host_data.cluster_issuers.contains(&claims.issuer) {
             return Err("Issuer of this invocation is not in list of cluster issuers".into());
@@ -720,7 +748,11 @@ impl<'send> Transport for ProviderTransport<'send> {
                     .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
             }
         };
-        self.bridge.rpc_client().send_timeout(origin, target, req, timeout).await
+        let lattice = &self.bridge.lattice_prefix;
+        self.bridge
+            .rpc_client()
+            .send_timeout(origin, target, lattice, req, timeout)
+            .await
     }
 
     fn set_timeout(&self, interval: Duration) {

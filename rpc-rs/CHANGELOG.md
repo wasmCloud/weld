@@ -3,7 +3,7 @@
 ## BREAKING CHANGES from 0.8.x to 0.9.0
 
 - nats-aflowt is replaced with async-nats!
-  - wasmbus_rpc::anats re-exports async_nats, not nats_aflowt.
+  - wasmbus_rpc::anats re-exports async_nats, not nats_aflowt
   - anats::ServerAddress renamed to anats::ServerAddr
   - anats::Subscription is not public, replaced with anats::Subscriber
   - anats::Subscription.close() replaced with anats::Subscriber.unsubscribe()
@@ -13,8 +13,9 @@
 - HostBridge::new() changes
   - first parameter is anats::Client instead of anats::Connection
 - RpcClient::new() changes 
-  - parameters are (anats::Client, Vec<u8>) instead of (anats::Connection, &[u8])
-- got rid of enum NatsClientType, replaced with anats::Client
+  - new() parameter takes async_nats Client instead of anats::Client
+  - lattice prefix removed from constructor, added in to some of the method parameters
+- got rid of enum NatsClientType, replaced with async_nats::Client
 - removed feature "chunkify" (it is always enabled for non-wasm32 targets)
 
 - RpcError does not implement Serialize, Deserialize, or PartialEq

@@ -101,7 +101,7 @@ where
     } else {
         crate::provider::DEFAULT_NATS_ADDR
     };
-    let nats_server = crate::anats::ServerAddr::from_str(nats_addr).map_err(|e| {
+    let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
     })?;
 
@@ -109,11 +109,11 @@ where
         host_data.lattice_rpc_user_jwt.trim(),
         host_data.lattice_rpc_user_seed.trim(),
     ) {
-        ("", "") => crate::anats::ConnectOptions::default(),
+        ("", "") => async_nats::ConnectOptions::default(),
         (rpc_jwt, rpc_seed) => {
             let key_pair = std::sync::Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
             let jwt = rpc_jwt.to_owned();
-            crate::anats::ConnectOptions::with_jwt(jwt, move |nonce| {
+            async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
                 let key_pair = key_pair.clone();
                 async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
             })
@@ -145,7 +145,13 @@ where
     }
 
     // subscribe to nats topics
-    let _join = bridge.connect(provider_dispatch, &shutdown_tx).await;
+    let _join = bridge
+        .connect(
+            provider_dispatch,
+            &shutdown_tx,
+            &host_data.lattice_rpc_prefix,
+        )
+        .await;
 
     // run until we receive a shutdown request from host
     let _ = shutdown_rx.recv().await;

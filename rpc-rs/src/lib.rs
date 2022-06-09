@@ -7,6 +7,9 @@
 mod timestamp;
 // re-export Timestamp
 pub use timestamp::Timestamp;
+// re-export wascap crate
+#[cfg(not(target_arch = "wasm32"))]
+pub use wascap;
 
 mod actor_wasm;
 pub mod cbor;
@@ -17,7 +20,6 @@ pub mod provider;
 pub(crate) mod provider_main;
 mod wasmbus_model;
 
-/// re-export async-nats as anats
 #[cfg(not(target_arch = "wasm32"))]
 pub use async_nats as anats;
 
@@ -71,19 +73,19 @@ pub mod core {
                 }
 
                 /// Connect to nats using options provided by host
-                pub async fn nats_connect(&self) -> RpcResult<crate::anats::Client> {
+                pub async fn nats_connect(&self) -> RpcResult<async_nats::Client> {
                     use std::str::FromStr as _;
                     let nats_addr = if !self.lattice_rpc_url.is_empty() {
                         self.lattice_rpc_url.as_str()
                     } else {
                         crate::provider::DEFAULT_NATS_ADDR
                     };
-                    let nats_server = crate::anats::ServerAddr::from_str(nats_addr).map_err(|e| {
+                    let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
                         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
                     })?;
 
                     // Connect to nats
-                    let nc = crate::anats::ConnectOptions::default()
+                    let nc = async_nats::ConnectOptions::default()
                         .connect(nats_server)
                         .await
                         .map_err(|e| {
@@ -137,17 +139,6 @@ pub mod core {
                 link_name: String::new(),
             })
         }
-
-        /*
-        /// create provider entity from link definition
-        pub fn from_link(link: &LinkDefinition) -> Self {
-            WasmCloudEntity {
-                public_key: link.provider_id.clone(),
-                contract_id: link.contract_id.clone(),
-                link_name: link.link_name.clone(),
-            }
-        }
-         */
 
         /// constructor for capability provider entity
         /// all parameters are required

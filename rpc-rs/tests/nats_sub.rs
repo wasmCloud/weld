@@ -1,16 +1,18 @@
 //! test nats subscriptions (queue and non-queue) with rpc_client
 #![cfg(test)]
 
-use std::{str::FromStr as _, time::Duration};
+use std::{str::FromStr as _, sync::Arc, time::Duration};
+
 use tracing::debug;
+use wascap::prelude::KeyPair;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
     rpc_client::RpcClient,
 };
 
+const ONE_SEC: Duration = Duration::from_secs(1);
 const THREE_SEC: Duration = Duration::from_secs(3);
 const TEST_NATS_ADDR: &str = "demo.nats.io";
-const LATTICE_PREFIX: &str = "test_nats_sub";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
 fn nats_url() -> String {
@@ -26,23 +28,19 @@ fn is_demo() -> bool {
 }
 
 /// create async nats client for test (sender or receiver)
-async fn make_client() -> RpcResult<RpcClient> {
+/// Parameter is optional RPC timeout
+async fn make_client(timeout: Option<Duration>) -> RpcResult<RpcClient> {
     let nats_url = nats_url();
-    let server_addr = wasmbus_rpc::anats::ServerAddr::from_str(&nats_url).unwrap();
-    let nc = wasmbus_rpc::anats::ConnectOptions::default()
+    let server_addr = async_nats::ServerAddr::from_str(&nats_url).unwrap();
+    let nc = async_nats::ConnectOptions::default()
         .connect(server_addr)
         .await
         .map_err(|e| {
             RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_url, e))
         })?;
-    let kp = wascap::prelude::KeyPair::new_user();
-    let client = RpcClient::new(
-        nc,
-        LATTICE_PREFIX,
-        kp,
-        HOST_ID.to_string(),
-        Some(Duration::from_secs(5)),
-    );
+
+    let key_pair = KeyPair::new_user();
+    let client = RpcClient::new(nc, HOST_ID.to_string(), timeout, Arc::new(key_pair));
     Ok(client)
 }
 
@@ -152,9 +150,9 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
     let sub_name = uuid::Uuid::new_v4().to_string();
 
     let topic = format!("one_{}", &sub_name);
-    let l1 = listen(make_client().await?, &topic, "^abc").await;
+    let l1 = listen(make_client(None).await?, &topic, "^abc").await;
 
-    let sender = make_client().await.expect("creating sender");
+    let sender = make_client(None).await.expect("creating sender");
     sender.publish(&topic, b"abc".to_vec()).await.expect("send");
     sender.publish(&topic, b"exit".to_vec()).await.expect("send");
     let val = l1.await.expect("join");
@@ -163,7 +161,7 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// send large messages to find size limits and test chunking
+/// send large messages - this uses request() and does not test chunking
 #[tokio::test]
 async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     if env_logger::try_init().is_err() {};
@@ -171,10 +169,10 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     let sub_name = uuid::Uuid::new_v4().to_string();
 
     let topic = format!("bin_{}", &sub_name);
-    let l1 = listen_bin(make_client().await?, &topic).await;
+    let l1 = listen_bin(make_client(Some(THREE_SEC)).await?, &topic).await;
 
     let mut pass_count = 0;
-    let sender = make_client().await.expect("creating bin sender");
+    let sender = make_client(Some(THREE_SEC)).await.expect("creating bin sender");
     //  messages sizes to test
     let test_sizes = if is_demo() {
         // if using 'demo.nats.io' as the test server,
@@ -189,11 +187,7 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     for size in test_sizes.iter() {
         let mut data = Vec::with_capacity(*size as usize);
         data.resize(*size as usize, 255u8);
-        let resp = match tokio::time::timeout(
-            Duration::from_millis(3000),
-            sender.request(topic.clone(), data),
-        )
-        .await
+        let resp = match tokio::time::timeout(THREE_SEC, sender.request(topic.clone(), data)).await
         {
             Ok(Ok(result)) => result,
             Ok(Err(rpc_err)) => {
@@ -259,12 +253,12 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
 
     let queue_name = uuid::Uuid::new_v4().to_string();
 
-    let thread1 = listen_queue(make_client().await?, &topic_one, &queue_name, "^one").await;
-    let thread2 = listen_queue(make_client().await?, &topic_one, &queue_name, "^one").await;
-    let thread3 = listen_queue(make_client().await?, &topic_two, &queue_name, "^two").await;
-    sleep(2000).await;
+    let thread1 = listen_queue(make_client(None).await?, &topic_one, &queue_name, "^one").await;
+    let thread2 = listen_queue(make_client(None).await?, &topic_one, &queue_name, "^one").await;
+    let thread3 = listen_queue(make_client(None).await?, &topic_two, &queue_name, "^two").await;
+    sleep(200).await;
 
-    let sender = make_client().await?;
+    let sender = make_client(None).await?;
     const SPLIT_TOTAL: usize = 6;
     const SINGLE_TOTAL: usize = 6;
     for _ in 0..SPLIT_TOTAL {
@@ -277,9 +271,9 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     check_ok(sender.request(topic_one.clone(), b"exit".to_vec()).await?)?;
     check_ok(sender.request(topic_two.clone(), b"exit".to_vec()).await?)?;
 
-    let v3 = wait_for(thread3, THREE_SEC).await??;
-    let v2 = wait_for(thread2, THREE_SEC).await??;
-    let v1 = wait_for(thread1, THREE_SEC).await??;
+    let v3 = wait_for(thread3, ONE_SEC).await??;
+    let v2 = wait_for(thread2, ONE_SEC).await??;
+    let v1 = wait_for(thread1, ONE_SEC).await??;
 
     assert_eq!(v1 + v2, SPLIT_TOTAL as u64, "no loss in queue");
     assert_eq!(v3, SINGLE_TOTAL as u64, "no overlap between queues");
