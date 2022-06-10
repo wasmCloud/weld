@@ -20,9 +20,6 @@ pub mod provider;
 pub(crate) mod provider_main;
 mod wasmbus_model;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use async_nats as anats;
-
 pub use minicbor;
 
 #[cfg(not(target_arch = "wasm32"))]
