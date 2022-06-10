@@ -157,7 +157,7 @@ macro_rules! process_until_quit {
 #[derive(Clone)]
 pub struct HostBridge {
     inner: Arc<HostBridgeInner>,
-    #[allow(dead_code)]
+    #[allow(dead_codet)]
     key: Arc<wascap::prelude::KeyPair>,
     host_data: HostData,
 }
