@@ -177,6 +177,14 @@ pub struct LanguageConfig {
     #[serde(default)]
     pub parameters: BTreeMap<String, TomlValue>,
 
+    /// source-code formatter
+    /// first item in vec should be program, rest are args
+    /// For languages other than rust, the formatter _only_ runs if defined in codegen.toml
+    /// example: [ "goimports", "-w" ]
+    /// example: [ "rustfmt", "--edition", "2021" ]
+    #[serde(default)]
+    pub formatter: Vec<String>,
+
     /// Settings specific to individual output files
     #[serde(default)]
     pub files: Vec<OutputFile>,
