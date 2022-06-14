@@ -12,7 +12,8 @@ use wasmbus_rpc::{
 
 const ONE_SEC: Duration = Duration::from_secs(1);
 const THREE_SEC: Duration = Duration::from_secs(3);
-const TEST_NATS_ADDR: &str = "demo.nats.io";
+const TEST_NATS_ADDR: &str = "nats://127.0.0.1:4222";
+//const LATTICE_PREFIX: &str = "test_nats_sub";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
 fn nats_url() -> String {
@@ -62,7 +63,7 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
                 println!("ERROR: payload on {}: {}", subject, &payload);
             }
             if let Some(reply_to) = msg.reply {
-                client.publish(&reply_to, b"ok".to_vec()).await.expect("reply");
+                client.publish(reply_to, b"ok".to_vec()).await.expect("reply");
             }
             if payload == "exit" {
                 break;
@@ -88,7 +89,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             let response = format!("{}", size);
             if let Some(reply_to) = msg.reply {
                 client
-                    .publish(&reply_to, response.as_bytes().to_vec())
+                    .publish(reply_to, response.as_bytes().to_vec())
                     .await
                     .expect("reply");
             }
@@ -131,7 +132,7 @@ async fn listen_queue(
             }
             if let Some(reply_to) = msg.reply {
                 debug!("listener {} replying ok", &subject);
-                client.publish(&reply_to, b"ok".to_vec()).await.expect("reply");
+                client.publish(reply_to, b"ok".to_vec()).await.expect("reply");
             }
             if &payload == "exit" {
                 let _ = sub.unsubscribe().await;
@@ -153,8 +154,8 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
     let l1 = listen(make_client(None).await?, &topic, "^abc").await;
 
     let sender = make_client(None).await.expect("creating sender");
-    sender.publish(&topic, b"abc".to_vec()).await.expect("send");
-    sender.publish(&topic, b"exit".to_vec()).await.expect("send");
+    sender.publish(topic.clone(), b"abc".to_vec()).await.expect("send");
+    sender.publish(topic, b"exit".to_vec()).await.expect("send");
     let val = l1.await.expect("join");
 
     assert_eq!(val, 1);

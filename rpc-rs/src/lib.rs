@@ -11,6 +11,11 @@ pub use timestamp::Timestamp;
 #[cfg(not(target_arch = "wasm32"))]
 pub use wascap;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "otel")]
+#[macro_use]
+pub mod otel;
+
 mod actor_wasm;
 pub mod cbor;
 pub mod common;
@@ -43,6 +48,8 @@ pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod chunkify;
 mod wasmbus_core;
+
+#[macro_use]
 
 pub mod model {
     // re-export model lib as "model"

@@ -14,11 +14,12 @@ edition = "2021"
 exclude = [ "build.rs" ]
 
 [features]
-default = [ ]
+default = [ "otel" ]
 BigInteger = [ "num-bigint" ]
 BigDecimal = [ "bigdecimal" ]
 # collect stats
 prometheus = [ "dep:prometheus" ]
+otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
 
 [dependencies]
 anyhow = "1.0.57"
@@ -56,8 +57,12 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 wascap = "0.8.0"
 sha2 = "0.10.2"
 data-encoding = "2.3"
-tracing-subscriber = { version = "0.3.7", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.7", features = ["env-filter", "json"] }
 atty = "0.2"
+opentelemetry = { version = "0.17", features = ["rt-tokio"], optional = true }
+tracing-opentelemetry = { version = "0.17", optional = true }
+lazy_static = "1.4"
+opentelemetry-otlp = { version = "0.10", features = ["http-proto", "reqwest-client"], optional = true }
 
 prometheus = { version = "0.13", optional = true }
 

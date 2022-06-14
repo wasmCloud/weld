@@ -2,6 +2,8 @@
 
 ## BREAKING CHANGES from 0.8.x to 0.9.0
 
+- provider_main has a new parameter: friendly_name
+- 
 - nats-aflowt is replaced with async-nats!
   - wasmbus_rpc::anats re-exports async_nats, not nats_aflowt
   - anats::ServerAddress renamed to anats::ServerAddr
