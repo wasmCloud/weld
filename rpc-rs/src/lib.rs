@@ -31,6 +31,7 @@ pub mod rpc_client;
 
 /// for testing
 #[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tracing {
     pub use super::provider_main::init_log_tracing;
     #[cfg(feature = "otel")]
