@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(unused_braces)]
 
 //! common provider wasmbus support
 //!
@@ -21,6 +22,7 @@ use futures::{future::JoinAll, StreamExt};
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
+#[cfg(feature = "otel")]
 use tracing_futures::Instrument;
 
 pub use crate::rpc_client::make_uuid;

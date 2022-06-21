@@ -3,7 +3,7 @@
 
 use std::{str::FromStr as _, sync::Arc, time::Duration};
 
-use tracing::debug;
+use tracing::{debug, error};
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
@@ -13,7 +13,6 @@ use wasmbus_rpc::{
 const ONE_SEC: Duration = Duration::from_secs(1);
 const THREE_SEC: Duration = Duration::from_secs(3);
 const TEST_NATS_ADDR: &str = "nats://127.0.0.1:4222";
-//const LATTICE_PREFIX: &str = "test_nats_sub";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
 fn nats_url() -> String {
@@ -83,15 +82,14 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
     let mut sub = nc.subscribe(subject.clone()).await.expect("subscriber");
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
-        println!("listening subj: {}", &subject);
         while let Some(msg) = sub.next().await {
             let size = msg.payload.len();
             let response = format!("{}", size);
             if let Some(reply_to) = msg.reply {
-                client
-                    .publish(reply_to, response.as_bytes().to_vec())
-                    .await
-                    .expect("reply");
+                //if let Err(e) = client.publish(reply_to, response.as_bytes().to_vec()).await {
+                if let Err(e) = nc.publish(reply_to, response.as_bytes().to_vec().into()).await {
+                    error!("error publishing subscriber response: {}", e);
+                }
             }
             count += 1;
             if size == 1 {
@@ -99,7 +97,6 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             }
         }
         let _ = sub.unsubscribe().await;
-        println!("listener exiting count={}", count);
         count
     })
 }
@@ -123,7 +120,6 @@ async fn listen_queue(
             .queue_subscribe(subject.clone(), queue.clone())
             .await
             .expect("group subscriber");
-        debug!("listening subj: {} queue: {}", subject.clone(), &queue);
         while let Some(msg) = sub.next().await {
             let payload = String::from_utf8_lossy(&msg.payload);
             if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
@@ -165,7 +161,7 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
 /// send large messages - this uses request() and does not test chunking
 #[tokio::test]
 async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
-    if env_logger::try_init().is_err() {};
+    wasmbus_rpc::tracing::init_log_tracing("testing".to_string(), false);
     // create unique subscription name for this test
     let sub_name = uuid::Uuid::new_v4().to_string();
 
@@ -180,10 +176,10 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
         // don't abuse it by running this test with very large sizes
         //
         // The last size must be 1 to signal to listen_bin to exit
-        &[25u32, 100, 200, 500, 1000, 1]
+        &[10u32, 25, 100, 200, 500, 1000, 1]
     } else {
         // The last size must be 1 to signal to listen_bin to exit
-        &[25u32, 500, 10_000, 800_000, 1_000_000, 1]
+        &[10u32, 25, 500, 10_000, 800_000, 1_000_000, 1]
     };
     for size in test_sizes.iter() {
         let mut data = Vec::with_capacity(*size as usize);
@@ -247,7 +243,6 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     // This confirms that publishing to queue subscription divides the load,
     // and also confirms that a queue group name ('X') is only applicable
     // within a topic.
-    let _ = env_logger::try_init();
     let sub_name = uuid::Uuid::new_v4().to_string();
     let topic_one = format!("one_{}", &sub_name);
     let topic_two = format!("two_{}", &sub_name);

@@ -1,11 +1,14 @@
+#![allow(unused_braces)]
 #![cfg(not(target_arch = "wasm32"))]
 
 use async_nats::HeaderMap;
 use std::{
     convert::{TryFrom, TryInto},
+    fmt,
     sync::Arc,
     time::Duration,
 };
+#[cfg(feature = "otel")]
 use tracing::Instrument;
 
 use crate::wascap::{jwt, prelude::Claims};
@@ -55,6 +58,13 @@ pub struct RpcClient {
 
     #[cfg(feature = "prometheus")]
     pub(crate) stats: Arc<RpcStats>,
+}
+
+// just so RpcClient can be included in other Debug structs
+impl fmt::Debug for RpcClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RpcClient()")
+    }
 }
 
 #[cfg(feature = "prometheus")]
@@ -441,7 +451,9 @@ impl RpcClient {
         let headers: Option<HeaderMap> = None;
 
         let nc = self.client();
+        #[cfg(feature = "otel")]
         let child = tracing::debug_span!("request");
+        #[cfg(feature = "otel")]
         span_record!(child, "subject", &subject);
         match async_span!({
             self.maybe_timeout(self.timeout, async move {
@@ -472,6 +484,7 @@ impl RpcClient {
         let headers: Option<HeaderMap> = None;
 
         let nc = self.client();
+        #[cfg(feature = "otel")]
         let child = tracing::debug_span!("publish");
         span_record!(child, "subject", &subject);
         self.maybe_timeout(self.timeout, async move {

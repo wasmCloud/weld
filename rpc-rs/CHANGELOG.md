@@ -3,17 +3,16 @@
 ## BREAKING CHANGES from 0.8.x to 0.9.0
 
 - provider_main has a new parameter: friendly_name
-- 
 - nats-aflowt is replaced with async-nats!
-  - wasmbus_rpc::anats re-exports async_nats, not nats_aflowt
-  - anats::ServerAddress renamed to anats::ServerAddr
-  - anats::Subscription is not public, replaced with anats::Subscriber
-  - anats::Subscription.close() replaced with anats::Subscriber.unsubscribe()
-  - anats::Options renamed to anats::ConnectOptions
-  - anats::Connection is no longer public. Use anats::Client instead.
-  - anats::Message.data renamed to .payload
+  - removed 'wasmbus_rpc::anats'
+  - anats::ServerAddress renamed to async_nats::ServerAddr
+  - anats::Subscription is not public, replaced with async_nats::Subscriber
+  - anats::Subscription.close() replaced with async_nats::Subscriber.unsubscribe()
+  - anats::Options renamed to async_nats::ConnectOptions
+  - anats::Connection is no longer public. Use async_nats::Client instead.
+  - anats::Message.data renamed to async_nats::Message.payload
 - HostBridge::new() changes
-  - first parameter is anats::Client instead of anats::Connection
+  - first parameter is async_nats::Client instead of anats::Connection
 - RpcClient::new() changes 
   - new() parameter takes async_nats Client instead of anats::Client
   - lattice prefix removed from constructor, added in to some of the method parameters
@@ -25,9 +24,12 @@
 
 
 ## non-breaking changes
-- upgraded minicbor to 0.16-rc1
+- new feature flag "otel" enables OpenTelemetry tracing spans
+  - set environment variable `OTEL_TRACES_EXPORTER` to "otlp"
+  - set environment variable `OTEL_EXPORTER_OTLP_ENDPOINT` to the desired collector. Defaults to "http://127.0.0.1:55681/v1/traces"
+    - ("/v1/traces" will always be appended to this setting if it doesn't already end with "/v1/traces")
+- dependencies (minicbor, uuid, and others)
 - replaced ring with sha2 for sha256
-- upgraded uuid
 
 
 ## 0.7.0

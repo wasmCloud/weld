@@ -275,8 +275,18 @@ where
     }
 }
 
-#[cfg(not(feature = "otel"))]
-fn configure_tracing(_: String, structured_logging_enabled: bool) {
+/// Configure tracing for logs or otel, depending on "otel" feature flag
+pub fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
+    #[cfg(feature = "otel")]
+    init_otel_tracing(provider_name, structured_logging_enabled);
+
+    #[cfg(not(feature = "otel"))]
+    init_log_tracing(provider_name, structured_logging_enabled);
+}
+
+/// If you don't want to use otel and just want log-based tracing,
+/// call this from provider_main to initialize logging
+pub fn init_log_tracing(_: String, structured_logging_enabled: bool) {
     let filter = get_env_filter();
     let layer = get_log_layer(structured_logging_enabled);
     let subscriber = tracing_subscriber::Registry::default().with(filter).with(layer);
@@ -285,8 +295,12 @@ fn configure_tracing(_: String, structured_logging_enabled: bool) {
     }
 }
 
+/// Call from provider_main to initialize OTEL tracing
 #[cfg(feature = "otel")]
-fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
+pub fn init_otel_tracing(
+    provider_name: impl Into<opentelemetry::Value>,
+    structured_logging_enabled: bool,
+) {
     let env_filter_layer = get_env_filter();
     let log_layer = get_log_layer(structured_logging_enabled);
     let subscriber = tracing_subscriber::Registry::default()
@@ -298,7 +312,7 @@ fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
         == "otlp"
     {
         let mut tracing_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| format!("http://localhost:55681{}", TRACING_PATH));
+            .unwrap_or_else(|_| format!("http://127.0.0.1:55681{}", TRACING_PATH));
         if !tracing_endpoint.ends_with(TRACING_PATH) {
             tracing_endpoint.push_str(TRACING_PATH);
         }

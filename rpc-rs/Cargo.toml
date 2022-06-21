@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.9.0"
+version = "0.9.0-alpha-1.0"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -17,7 +17,6 @@ exclude = [ "build.rs" ]
 default = [ "otel" ]
 BigInteger = [ "num-bigint" ]
 BigDecimal = [ "bigdecimal" ]
-# collect stats
 prometheus = [ "dep:prometheus" ]
 otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
 
@@ -36,7 +35,7 @@ thiserror = "1.0"
 time = "0.3.7"
 tokio-timer = "0.2"
 toml = "0.5"
-tracing = { version = "0.1.34", features = ["log"] }
+tracing = "0.1.34"
 tracing-futures = "0.2"
 wasmbus-macros = { path = "../macros", version = "0.1.8" }
 minicbor-ser = "0.1.2"
@@ -49,7 +48,7 @@ bigdecimal = { version = "0.3", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
-async-nats = "0.14.0" # git = "https://github.com/nats-io/nats.rs"
+async-nats = "0.15.0"
 nats = "0.20.1"
 nkeys = "0.2"
 once_cell = "1.8"
@@ -68,7 +67,7 @@ prometheus = { version = "0.13", optional = true }
 
 [dev-dependencies]
 regex = "1"
-env_logger = "0.9.0"
+clap = { version = "3.2.5", features = ["derive"] }
 
 [build-dependencies]
 weld-codegen = { version = "0.4.3", path = "../codegen" }

@@ -12,7 +12,6 @@ pub use timestamp::Timestamp;
 pub use wascap;
 
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg(feature = "otel")]
 #[macro_use]
 pub mod otel;
 
@@ -29,6 +28,14 @@ pub use minicbor;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod rpc_client;
+
+/// for testing
+#[doc(hidden)]
+pub mod tracing {
+    pub use super::provider_main::init_log_tracing;
+    #[cfg(feature = "otel")]
+    pub use super::provider_main::init_otel_tracing;
+}
 
 /// import module for webassembly linking
 #[doc(hidden)]
@@ -310,7 +317,7 @@ mod some_tests {
         assert_eq!(v10.as_ref().err().unwrap().to_string().as_str(), "rpc:10");
         if let Err(e) = &v10 {
             if let Some(rpc_err) = e.downcast_ref::<RpcError>() {
-                eprintln!("10 is rpc error");
+                eprintln!("10 is rpc error (ok)");
                 match rpc_err {
                     RpcError::Other(s) => {
                         eprintln!("RpcError::Other({})", s);
@@ -332,7 +339,7 @@ mod some_tests {
         assert_eq!(v20.as_ref().err().unwrap().to_string().as_str(), "any:20");
         if let Err(e) = &v20 {
             if let Some(rpc_err) = e.downcast_ref::<RpcError>() {
-                eprintln!("20 is rpc error");
+                eprintln!("20 is rpc error (ok)");
                 match rpc_err {
                     RpcError::Other(s) => {
                         eprintln!("RpcError::Other({})", s);
