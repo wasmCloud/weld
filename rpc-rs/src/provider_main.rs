@@ -149,20 +149,22 @@ where
         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
     })?;
 
-    let nc = match (
-        host_data.lattice_rpc_user_jwt.trim(),
-        host_data.lattice_rpc_user_seed.trim(),
-    ) {
-        ("", "") => async_nats::ConnectOptions::default(),
-        (rpc_jwt, rpc_seed) => {
-            let key_pair = std::sync::Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
-            let jwt = rpc_jwt.to_owned();
-            async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
-                let key_pair = key_pair.clone();
-                async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-            })
-        }
-    }
+    let nc = crate::rpc_client::with_connection_event_logging(
+        match (
+            host_data.lattice_rpc_user_jwt.trim(),
+            host_data.lattice_rpc_user_seed.trim(),
+        ) {
+            ("", "") => async_nats::ConnectOptions::default(),
+            (rpc_jwt, rpc_seed) => {
+                let key_pair = std::sync::Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
+                let jwt = rpc_jwt.to_owned();
+                async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                    let key_pair = key_pair.clone();
+                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                })
+            }
+        },
+    )
     .connect(nats_server)
     .await?;
 

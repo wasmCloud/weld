@@ -17,7 +17,7 @@ use futures::Future;
 use prometheus::{IntCounter, Opts};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace, warn};
 
 #[cfg(feature = "otel")]
 use crate::otel::OtelHeaderInjector;
@@ -288,7 +288,7 @@ impl RpcClient {
         span_record!(span, "target_id", &target.public_key);
         span_record!(span, "inv_id", &subject);
 
-        debug!("rpc_client sending");
+        //debug!("rpc_client sending");
         let claims = Claims::<jwt::Invocation>::new(
             issuer.clone(),
             subject.clone(),
@@ -452,7 +452,7 @@ impl RpcClient {
 
         let nc = self.client();
         #[cfg(feature = "otel")]
-        let child = tracing::debug_span!("request");
+        let child = tracing::debug_span!("nats request");
         #[cfg(feature = "otel")]
         span_record!(child, "subject", &subject);
         match async_span!({
@@ -489,9 +489,13 @@ impl RpcClient {
         span_record!(child, "subject", &subject);
         self.maybe_timeout(self.timeout, async move {
             if let Some(headers) = headers {
-                nc.publish_with_headers(subject, headers, payload.into()).await
+                nc.publish_with_headers(subject, headers, payload.into())
+                    .await
+                    .map_err(|e| RpcError::Nats(e.to_string()))
             } else {
-                nc.publish(subject, payload.into()).await
+                nc.publish(subject, payload.into())
+                    .await
+                    .map_err(|e| RpcError::Nats(e.to_string()))
             }
         })
         .await?;
@@ -643,6 +647,19 @@ impl RpcClient {
             f.await.map_err(|e| RpcError::Nats(e.to_string()))
         }
     }
+}
+
+/// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), and lame duck(warn) events.
+pub fn with_connection_event_logging(
+    opts: async_nats::ConnectOptions,
+) -> async_nats::ConnectOptions {
+    opts.disconnect_callback(|| async {
+        warn!("nats connection has disconnected. Attempting reconnection ...");
+    })
+    .reconnect_callback(|| async { info!("nats connection has been reestablished.") })
+    .error_callback(|error| async move { error!(%error, "nats connection encountered error ") })
+    .lame_duck_callback(|| async { warn!("nats connection has entered lame duck mode") })
+    .ping_interval(Duration::from_secs(17))
 }
 
 #[derive(Clone)]
