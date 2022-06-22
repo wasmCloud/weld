@@ -130,7 +130,7 @@ where
 {
     configure_tracing(
         friendly_name.unwrap_or_else(|| host_data.provider_key.clone()),
-        host_data.structured_logging_enabled,
+        host_data.structured_logging,
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<bool>(1);
