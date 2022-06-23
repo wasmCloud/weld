@@ -397,81 +397,86 @@ impl HostBridge {
                             None => break,
                             Some(msg) => msg
                         };
-                        #[cfg(feature = "otel")]
-                        let span = tracing::debug_span!("rpc");
-                        #[cfg(feature = "otel")]
-                        let _enter = span.enter();
-                        #[cfg(feature = "otel")]
-                        crate::otel::attach_span_context(&msg);
-                        let inv = match crate::common::deserialize::<Invocation>(&msg.payload) {
-                            Ok(inv) => inv,
-                            Err(error) => {
-                                error!(%error, "invalid rpc message received (not deserializable)");
-                                if let Some(reply) = msg.reply {
-                                    let _ = async_span!({
-                                        this.rpc_client().publish_invocation_response(reply,
-                                            InvocationResponse{
-                                                error: Some(format!("deser error: {}", error)),
-                                                ..Default::default()
-                                            },
-                                            &lattice
-                                        ).await
-                                    }).await;
-                                }
-                                continue;
-                            }
-                        };
-                        let inv_log = InvLog::init(&inv);
-                        span_record!(span, "operation", &inv.operation);
-                        span_record!(span, "operation", &inv.operation);
-                        span_record!(span, "lattice_id", &lattice);
-                        span_record!(span, "actor_id", &inv_log.origin);
-                        span_record!(span, "inv_id", &inv_log.id);
-                        span_record!(span, "provider_id", &inv.target.public_key);
-                        span_record!(span, "contract_id", &inv.target.contract_id);
-                        span_record!(span, "link_name", &inv.target.link_name);
-                        span_record!(span, "payload_size", &inv.content_length.unwrap_or_default());
-                        let this_ = this.clone();
+                        let this = this.clone();
                         let provider = provider.clone();
-                        let resp = match async_span!(move, {
-                            this_.handle_rpc(provider, inv).await })
-                        .await {
-                            Err(error) => {
-                                error!(
-                                    operation = %inv_log.operation,
-                                    public_key = %inv_log.origin,
-                                    invocation_id = %inv_log.id,
-                                    host_id = %inv_log.host_id,
-                                    %error,
-                                    "Invocation failed"
-                                );
-                                InvocationResponse{
-                                    invocation_id: inv_log.id,
-                                    error: Some(error.to_string()),
-                                    ..Default::default()
+                        let lattice = lattice.clone();
+                        tokio::spawn( async move {
+                            #[cfg(feature = "otel")]
+                            let span = tracing::debug_span!("rpc");
+                            #[cfg(feature = "otel")]
+                            let _enter = span.enter();
+                            #[cfg(feature = "otel")]
+                            crate::otel::attach_span_context(&msg);
+                            match crate::common::deserialize::<Invocation>(&msg.payload) {
+                                Ok(inv) => {
+                                    let inv_log = InvLog::init(&inv);
+                                    span_record!(span, "operation", &inv.operation);
+                                    span_record!(span, "operation", &inv.operation);
+                                    span_record!(span, "lattice_id", &lattice);
+                                    span_record!(span, "actor_id", &inv_log.origin);
+                                    span_record!(span, "inv_id", &inv_log.id);
+                                    span_record!(span, "provider_id", &inv.target.public_key);
+                                    span_record!(span, "contract_id", &inv.target.contract_id);
+                                    span_record!(span, "link_name", &inv.target.link_name);
+                                    span_record!(span, "payload_size", &inv.content_length.unwrap_or_default());
+                                    let this_ = this.clone();
+                                    let provider = provider.clone();
+                                    let resp = match async_span!(move, {
+                                        this_.handle_rpc(provider, inv).await })
+                                    .await {
+                                        Err(error) => {
+                                            error!(
+                                                operation = %inv_log.operation,
+                                                public_key = %inv_log.origin,
+                                                invocation_id = %inv_log.id,
+                                                host_id = %inv_log.host_id,
+                                                %error,
+                                                "Invocation failed"
+                                            );
+                                            InvocationResponse{
+                                                invocation_id: inv_log.id,
+                                                error: Some(error.to_string()),
+                                                ..Default::default()
+                                            }
+                                        },
+                                        Ok(bytes) => {
+                                            InvocationResponse{
+                                                invocation_id: inv_log.id,
+                                                content_length: Some(bytes.len() as u64),
+                                                msg: bytes,
+                                                ..Default::default()
+                                            }
+                                        }
+                                    };
+                                    if let Some(reply) = msg.reply {
+                                        // send reply
+                                        if let Err(error) = async_span!({
+                                            this.rpc_client()
+                                                .publish_invocation_response(reply, resp, &lattice).await
+                                        }).await {
+                                            error!(%error, "rpc sending response");
+                                        }
+                                    }
+                                },
+                                Err(error) => {
+                                    error!(%error, "invalid rpc message received (not deserializable)");
+                                    if let Some(reply) = msg.reply {
+                                        let _ = async_span!({
+                                            this.rpc_client().publish_invocation_response(reply,
+                                                InvocationResponse{
+                                                    error: Some(format!("deser error: {}", error)),
+                                                    ..Default::default()
+                                                },
+                                                &lattice
+                                            ).await
+                                        }).await;
+                                    }
                                 }
-                            },
-                            Ok(bytes) => {
-                                InvocationResponse{
-                                    invocation_id: inv_log.id,
-                                    content_length: Some(bytes.len() as u64),
-                                    msg: bytes,
-                                    ..Default::default()
-                                }
-                            }
-                        };
-                        if let Some(reply) = msg.reply {
-                            // send reply
-                            if let Err(error) = async_span!({
-                                this.rpc_client()
-                                    .publish_invocation_response(reply, resp, &lattice).await
-                            }).await {
-                                error!(%error, "rpc sending response");
-                            }
-                        }
-                    }
+                            };
+                        }); /* spawn */
+                    } /* next */
                 }
-            }
+            } /* loop */
         });
         Ok(())
     }
@@ -498,7 +503,7 @@ impl HostBridge {
         span_record!(child, "operation", &inv.operation);
         #[cfg(feature = "otel")]
         let _enter = child.enter();
-        let rc = tokio::spawn(async move {
+        let rc = async_span!({
             provider
                 .dispatch(
                     &Context {
@@ -511,13 +516,12 @@ impl HostBridge {
                     },
                 )
                 .await
-                .map(|m| m.arg.to_vec())
         })
         .await
-        .map_err(|join_err| RpcError::Other(format!("dispatch subtask failed: {}", join_err)))?;
+        .map(|m| m.arg.to_vec());
 
-        //#[cfg(feature = "otel")]
-        //drop(_enter);
+        #[cfg(feature = "otel")]
+        drop(_enter);
 
         #[cfg(feature = "prometheus")]
         match &rc {
