@@ -84,6 +84,6 @@ impl<E: std::fmt::Display> From<minicbor::encode::Error<E>> for RpcError {
 
 impl From<minicbor::decode::Error> for RpcError {
     fn from(e: minicbor::decode::Error) -> RpcError {
-        RpcError::Other(format!("encode: {}", e))
+        RpcError::Other(format!("decode: {}", e))
     }
 }
