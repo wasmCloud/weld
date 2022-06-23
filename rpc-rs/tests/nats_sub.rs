@@ -1,7 +1,7 @@
 //! test nats subscriptions (queue and non-queue) with rpc_client
 #![cfg(test)]
 
-use std::{str::FromStr as _, sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use tracing::{debug, error};
 use wascap::prelude::KeyPair;
@@ -86,7 +86,6 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             let size = msg.payload.len();
             let response = format!("{}", size);
             if let Some(reply_to) = msg.reply {
-                //if let Err(e) = client.publish(reply_to, response.as_bytes().to_vec()).await {
                 if let Err(e) = nc.publish(reply_to, response.as_bytes().to_vec().into()).await {
                     error!("error publishing subscriber response: {}", e);
                 }
@@ -97,6 +96,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             }
         }
         let _ = sub.unsubscribe().await;
+        debug!("listen_bin exiting with count {}", count);
         count
     })
 }
