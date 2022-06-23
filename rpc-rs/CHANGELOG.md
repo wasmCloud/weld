@@ -2,7 +2,10 @@
 
 ## BREAKING CHANGES from 0.8.x to 0.9.0
 
-- provider_main has a new parameter: friendly_name
+- provider_main has a new parameter: friendly_name, which is displayed on OTEL tracing dashboards.
+   Instead of `provider_main(MyAwesomeProvider::default())`, use:
+   `provider_main(MyAwesomeProvider::default(), Some("My Awesome Provider".to_string()))` 
+   
 - nats-aflowt is replaced with async-nats!
   - removed 'wasmbus_rpc::anats'
   - anats::ServerAddress renamed to async_nats::ServerAddr
