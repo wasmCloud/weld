@@ -498,7 +498,7 @@ impl HostBridge {
         span_record!(child, "operation", &inv.operation);
         #[cfg(feature = "otel")]
         let _enter = child.enter();
-        let rc = async_span!({
+        let rc = tokio::spawn(async move {
             provider
                 .dispatch(
                     &Context {
@@ -511,11 +511,13 @@ impl HostBridge {
                     },
                 )
                 .await
+                .map(|m| m.arg.to_vec())
         })
         .await
-        .map(|m| m.arg.to_vec());
-        #[cfg(feature = "otel")]
-        drop(_enter);
+        .map_err(|join_err| RpcError::Other(format!("dispatch subtask failed: {}", join_err)))?;
+
+        //#[cfg(feature = "otel")]
+        //drop(_enter);
 
         #[cfg(feature = "prometheus")]
         match &rc {
