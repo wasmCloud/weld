@@ -21,6 +21,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // To enable otel tracing, uncomment the line below.
     //wasmbus_rpc::tracing::init_otel_tracing("sub_bin", true);
     let args = Args::parse();
     if args.subject.is_empty() {
