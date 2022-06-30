@@ -11,7 +11,7 @@ pub use timestamp::Timestamp;
 #[cfg(not(target_arch = "wasm32"))]
 pub use wascap;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "otel"))]
 #[macro_use]
 pub mod otel;
 
@@ -28,15 +28,6 @@ pub use minicbor;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod rpc_client;
-
-/// for testing
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub mod tracing {
-    pub use super::provider_main::init_log_tracing;
-    #[cfg(feature = "otel")]
-    pub use super::provider_main::init_otel_tracing;
-}
 
 /// import module for webassembly linking
 #[doc(hidden)]
@@ -62,8 +53,6 @@ mod wasmbus_core;
 pub mod model {
     // re-export model lib as "model"
     pub use crate::wasmbus_model::*;
-    // declare unit type
-    pub type Unit = ();
 }
 
 pub mod core {
@@ -275,7 +264,7 @@ pub mod actor {
 }
 
 #[cfg(test)]
-mod some_tests {
+mod test {
     use anyhow::anyhow;
 
     fn ret_rpc_err(val: u8) -> Result<u8, crate::error::RpcError> {
@@ -287,7 +276,7 @@ mod some_tests {
         Ok(x)
     }
 
-    fn ret_any(val: u8) -> Result<u8, anyhow::Error> {
+    fn ret_any(val: u8) -> anyhow::Result<u8> {
         let x = match val {
             0 => Ok(0),
             20 | 21 => Err(anyhow!("any:{}", val)),
@@ -296,7 +285,7 @@ mod some_tests {
         Ok(x)
     }
 
-    fn either(val: u8) -> Result<u8, anyhow::Error> {
+    fn either(val: u8) -> anyhow::Result<u8> {
         let x = match val {
             0 => 0,
             10 | 11 => ret_rpc_err(val)?,

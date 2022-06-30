@@ -1,49 +1,14 @@
-#![cfg(not(target_arch = "wasm"))]
 //! Contains helpers and code for enabling [OpenTelemetry](https://opentelemetry.io/) tracing for
 //! wasmbus-rpc calls. Please note that right now this is only supported for providers. This module
 //! is only available with the `otel` feature enabled
 
 use async_nats::header::HeaderMap;
-#[cfg(feature = "otel")]
 use opentelemetry::{
     propagation::{Extractor, Injector, TextMapPropagator},
     sdk::propagation::TraceContextPropagator,
 };
-#[cfg(feature = "otel")]
 use tracing::span::Span;
-#[cfg(feature = "otel")]
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-#[cfg(feature = "otel")]
-macro_rules! span_record {
-    ($span:ident, $name:expr, $val:expr) => {
-        $span.record($name, &tracing::field::display($val));
-    };
-}
-#[cfg(not(feature = "otel"))]
-macro_rules! span_record {
-    ($span:ident, $name:expr, $val:expr) => {};
-}
-
-#[cfg(feature = "otel")]
-macro_rules! async_span {
-    ($move:tt, $fut:block) => {
-        async move { $fut }.in_current_span()
-    };
-    ($fut:block) => {
-        async { $fut }.in_current_span()
-    };
-}
-
-#[cfg(not(feature = "otel"))]
-macro_rules! async_span {
-    ($move:tt, $fut:tt) => {
-        async move { $fut }
-    };
-    ($fut:tt) => {
-        async { $fut }
-    };
-}
 
 lazy_static::lazy_static! {
     static ref EMPTY_HEADERS: HeaderMap = HeaderMap::default();
@@ -69,7 +34,6 @@ impl<'a> OtelHeaderExtractor<'a> {
     }
 }
 
-#[cfg(feature = "otel")]
 impl<'a> Extractor for OtelHeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
         self.inner.get(key).and_then(|s| s.to_str().ok())
@@ -87,13 +51,11 @@ impl<'a> AsRef<HeaderMap> for OtelHeaderExtractor<'a> {
 }
 
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Injector`] trait
-#[cfg(feature = "otel")]
 #[derive(Debug, Default)]
 pub struct OtelHeaderInjector {
     inner: HeaderMap,
 }
 
-#[cfg(feature = "otel")]
 impl OtelHeaderInjector {
     /// Creates a new injector using the given [`HeaderMap`]
     pub fn new(headers: HeaderMap) -> Self {
@@ -123,7 +85,6 @@ impl OtelHeaderInjector {
     }
 }
 
-#[cfg(feature = "otel")]
 impl Injector for OtelHeaderInjector {
     fn set(&mut self, key: &str, value: String) {
         // NOTE: Because the underlying headers are an http header, we are going to escape any
@@ -142,21 +103,18 @@ impl Injector for OtelHeaderInjector {
     }
 }
 
-#[cfg(feature = "otel")]
 impl AsRef<HeaderMap> for OtelHeaderInjector {
     fn as_ref(&self) -> &HeaderMap {
         &self.inner
     }
 }
 
-#[cfg(feature = "otel")]
 impl From<HeaderMap> for OtelHeaderInjector {
     fn from(headers: HeaderMap) -> Self {
         OtelHeaderInjector::new(headers)
     }
 }
 
-#[cfg(feature = "otel")]
 impl From<OtelHeaderInjector> for HeaderMap {
     fn from(inj: OtelHeaderInjector) -> Self {
         inj.inner
@@ -166,7 +124,6 @@ impl From<OtelHeaderInjector> for HeaderMap {
 /// A convenience function that will extract the current context from NATS message headers and set
 /// the parent span for the current tracing Span. If you want to do something more advanced, use the
 /// [`OtelHeaderExtractor`] type directly
-#[cfg(feature = "otel")]
 pub fn attach_span_context(msg: &async_nats::Message) {
     let header_map = OtelHeaderExtractor::new_from_message(msg);
     let ctx_propagator = TraceContextPropagator::new();

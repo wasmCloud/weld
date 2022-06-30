@@ -161,7 +161,6 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
 /// send large messages - this uses request() and does not test chunking
 #[tokio::test]
 async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
-    wasmbus_rpc::tracing::init_log_tracing("testing".to_string(), false);
     // create unique subscription name for this test
     let sub_name = uuid::Uuid::new_v4().to_string();
 

@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-#![allow(unused_braces)]
 
 //! common provider wasmbus support
 //!
@@ -22,7 +21,6 @@ use futures::{future::JoinAll, StreamExt};
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
-#[cfg(feature = "otel")]
 use tracing_futures::Instrument;
 
 pub use crate::rpc_client::make_uuid;
@@ -46,24 +44,6 @@ pub type HostShutdownEvent = String;
 
 pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
 trait ProviderImpl: ProviderDispatch + Send + Sync + 'static {}
-
-// temporary holder for invocation info for logging
-struct InvLog {
-    operation: String,
-    origin: String,
-    id: String,
-    host_id: String,
-}
-impl InvLog {
-    fn init(inv: &Invocation) -> Self {
-        InvLog {
-            operation: inv.operation.clone(),
-            origin: inv.origin.public_key.clone(),
-            id: inv.id.clone(),
-            host_id: inv.host_id.clone(),
-        }
-    }
-}
 
 pub mod prelude {
     pub use crate::{
@@ -369,7 +349,7 @@ impl HostBridge {
     pub async fn subscribe_rpc<P>(
         &self,
         provider: P,
-        mut quit: tokio::sync::broadcast::Receiver<bool>,
+        mut quit: QuitSignal,
         lattice: String,
     ) -> RpcResult<()>
     where
@@ -401,47 +381,38 @@ impl HostBridge {
                         let provider = provider.clone();
                         let lattice = lattice.clone();
                         tokio::spawn( async move {
-                            #[cfg(feature = "otel")]
                             let span = tracing::debug_span!("rpc");
-                            #[cfg(feature = "otel")]
                             let _enter = span.enter();
                             #[cfg(feature = "otel")]
                             crate::otel::attach_span_context(&msg);
                             match crate::common::deserialize::<Invocation>(&msg.payload) {
                                 Ok(inv) => {
-                                    let inv_log = InvLog::init(&inv);
-                                    span_record!(span, "operation", &inv.operation);
-                                    span_record!(span, "operation", &inv.operation);
-                                    span_record!(span, "lattice_id", &lattice);
-                                    span_record!(span, "actor_id", &inv_log.origin);
-                                    span_record!(span, "inv_id", &inv_log.id);
-                                    span_record!(span, "provider_id", &inv.target.public_key);
-                                    span_record!(span, "contract_id", &inv.target.contract_id);
-                                    span_record!(span, "link_name", &inv.target.link_name);
-                                    span_record!(span, "payload_size", &inv.content_length.unwrap_or_default());
-                                    let this_ = this.clone();
+                                    let inv_id = inv.id.clone();
+                                    span.record("operation", &tracing::field::display(&inv.operation));
+                                    span.record("lattice_id", &tracing::field::display(&lattice));
+                                    span.record("actor_id", &tracing::field::display(&inv.origin));
+                                    span.record("inv_id", &tracing::field::display(&inv.id));
+                                    span.record("host_id", &tracing::field::display(&inv.host_id));
+                                    span.record("provider_id", &tracing::field::display(&inv.target.public_key));
+                                    span.record("contract_id", &tracing::field::display(&inv.target.contract_id));
+                                    span.record("link_name", &tracing::field::display(&inv.target.link_name));
+                                    span.record("payload_size", &tracing::field::display(&inv.content_length.unwrap_or_default()));
                                     let provider = provider.clone();
-                                    let resp = match async_span!(move, {
-                                        this_.handle_rpc(provider, inv).await })
-                                    .await {
+                                    let resp = match this.handle_rpc(provider, inv).in_current_span().await {
                                         Err(error) => {
                                             error!(
-                                                operation = %inv_log.operation,
-                                                public_key = %inv_log.origin,
-                                                invocation_id = %inv_log.id,
-                                                host_id = %inv_log.host_id,
                                                 %error,
                                                 "Invocation failed"
                                             );
                                             InvocationResponse{
-                                                invocation_id: inv_log.id,
+                                                invocation_id: inv_id,
                                                 error: Some(error.to_string()),
                                                 ..Default::default()
                                             }
                                         },
                                         Ok(bytes) => {
                                             InvocationResponse{
-                                                invocation_id: inv_log.id,
+                                                invocation_id: inv_id,
                                                 content_length: Some(bytes.len() as u64),
                                                 msg: bytes,
                                                 ..Default::default()
@@ -450,10 +421,8 @@ impl HostBridge {
                                     };
                                     if let Some(reply) = msg.reply {
                                         // send reply
-                                        if let Err(error) = async_span!({
-                                            this.rpc_client()
-                                                .publish_invocation_response(reply, resp, &lattice).await
-                                        }).await {
+                                        if let Err(error) = this.rpc_client()
+                                        .publish_invocation_response(reply, resp, &lattice).in_current_span().await {
                                             error!(%error, "rpc sending response");
                                         }
                                     }
@@ -461,15 +430,15 @@ impl HostBridge {
                                 Err(error) => {
                                     error!(%error, "invalid rpc message received (not deserializable)");
                                     if let Some(reply) = msg.reply {
-                                        let _ = async_span!({
-                                            this.rpc_client().publish_invocation_response(reply,
-                                                InvocationResponse{
-                                                    error: Some(format!("deser error: {}", error)),
-                                                    ..Default::default()
-                                                },
-                                                &lattice
-                                            ).await
-                                        }).await;
+                                        if let Err(e) = this.rpc_client().publish_invocation_response(reply,
+                                            InvocationResponse{
+                                                error: Some(format!("deser error: {}", error)),
+                                                ..Default::default()
+                                            },
+                                            &lattice
+                                        ).in_current_span().await {
+                                            error!(error = %e, "unable to publish error message to invocation response");
+                                        }
                                     }
                                 }
                             };
@@ -493,35 +462,24 @@ impl HostBridge {
             }
             self.rpc_client.stats.rpc_recv.inc();
         }
-        let inv = async_span!({ self.rpc_client().dechunk(inv, lattice).await }).await?;
-        let (inv, claims) = async_span!({ self.rpc_client.validate_invocation(inv).await }).await?;
-        async_span!({ self.validate_provider_invocation(&inv, &claims).await }).await?;
+        let inv = self.rpc_client().dechunk(inv, lattice).await?;
+        let (inv, claims) = self.rpc_client.validate_invocation(inv).await?;
+        self.validate_provider_invocation(&inv, &claims).await?;
 
-        #[cfg(feature = "otel")]
-        let child = tracing::debug_span!("dispatch");
-        span_record!(child, "public_key", &inv.origin.public_key);
-        span_record!(child, "operation", &inv.operation);
-        #[cfg(feature = "otel")]
-        let _enter = child.enter();
-        let rc = async_span!({
-            provider
-                .dispatch(
-                    &Context {
-                        actor: Some(inv.origin.public_key.clone()),
-                        ..Default::default()
-                    },
-                    Message {
-                        method: &inv.operation,
-                        arg: Cow::from(inv.msg),
-                    },
-                )
-                .await
-        })
-        .await
-        .map(|m| m.arg.to_vec());
-
-        #[cfg(feature = "otel")]
-        drop(_enter);
+        let rc = provider
+            .dispatch(
+                &Context {
+                    actor: Some(inv.origin.public_key.clone()),
+                    ..Default::default()
+                },
+                Message {
+                    method: &inv.operation,
+                    arg: Cow::from(inv.msg),
+                },
+            )
+            .instrument(tracing::debug_span!("dispatch", public_key = %inv.origin.public_key, operation = %inv.operation))
+            .await
+            .map(|m| m.arg.to_vec());
 
         #[cfg(feature = "prometheus")]
         match &rc {
@@ -602,26 +560,24 @@ impl HostBridge {
             .map_err(|e| RpcError::Nats(e.to_string()))?;
         let (this, provider) = (self.clone(), provider.clone());
         process_until_quit!(sub, quit, msg, {
-            #[cfg(feature = "otel")]
             let span = tracing::error_span!(
                 "subscribe_link_put",
                 actor_id = tracing::field::Empty,
                 provider_id = tracing::field::Empty
             );
-            #[cfg(feature = "otel")]
             let _enter = span.enter();
             if let Some(ld) = this.parse_msg::<LinkDefinition>(&msg, "link.put") {
-                span_record!(span, "actor_id", &ld.actor_id);
-                span_record!(span, "provider_id", &ld.provider_id);
-                span_record!(span, "contract_id", &ld.contract_id);
-                span_record!(span, "link_name", &ld.link_name);
-                if async_span!({ this.is_linked(&ld.actor_id).await }).await {
+                span.record("actor_id", &tracing::field::display(&ld.actor_id));
+                span.record("provider_id", &tracing::field::display(&ld.provider_id));
+                span.record("contract_id", &tracing::field::display(&ld.contract_id));
+                span.record("link_name", &tracing::field::display(&ld.link_name));
+                if this.is_linked(&ld.actor_id).await {
                     warn!("Ignoring duplicate link put");
                 } else {
                     info!("Linking actor with provider");
-                    match async_span!({ provider.put_link(&ld).await }).await {
+                    match provider.put_link(&ld).await {
                         Ok(true) => {
-                            async_span!({ this.put_link(ld).await }).await;
+                            this.put_link(ld).await;
                         }
                         Ok(false) => {
                             // authorization failed or parameters were invalid
@@ -655,14 +611,12 @@ impl HostBridge {
             .map_err(|e| RpcError::Nats(e.to_string()))?;
         let (this, provider) = (self.clone(), provider.clone());
         process_until_quit!(sub, quit, msg, {
-            #[cfg(feature = "otel")]
             let span = tracing::trace_span!("subscribe_link_del", topic = %link_del_topic);
-            #[cfg(feature = "otel")]
             let _enter = span.enter();
             if let Some(ld) = &this.parse_msg::<LinkDefinition>(&msg, "link.del") {
-                async_span!({ this.delete_link(&ld.actor_id).await }).await;
+                this.delete_link(&ld.actor_id).await;
                 // notify provider that link is deleted
-                async_span!({ provider.delete_link(&ld.actor_id).await }).await;
+                provider.delete_link(&ld.actor_id).await;
             }
         });
         Ok(())

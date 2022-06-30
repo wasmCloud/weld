@@ -56,8 +56,6 @@ pub enum RpcError {
 
 pub type RpcResult<T> = std::result::Result<T, RpcError>;
 
-pub type Result<T> = std::result::Result<T, anyhow::Error>;
-
 impl From<String> for RpcError {
     fn from(s: String) -> RpcError {
         RpcError::Other(s)

@@ -1,27 +1,24 @@
-#![allow(unused_braces)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use async_nats::HeaderMap;
 use std::{
     convert::{TryFrom, TryInto},
     fmt,
     sync::Arc,
     time::Duration,
 };
-#[cfg(feature = "otel")]
-use tracing::Instrument;
 
-use crate::wascap::{jwt, prelude::Claims};
+use async_nats::HeaderMap;
 use futures::Future;
 #[cfg(feature = "prometheus")]
 use prometheus::{IntCounter, Opts};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 #[cfg(feature = "otel")]
 use crate::otel::OtelHeaderInjector;
 
+use crate::wascap::{jwt, prelude::Claims};
 use crate::{
     chunkify,
     common::Message,
@@ -258,7 +255,7 @@ impl RpcClient {
     }
 
     /// request or publish an rpc invocation
-    //    #[instrument(level = "debug", skip(self, origin, target, message), fields(issuer = tracing::field::Empty, origin_url = tracing::field::Empty, subject = tracing::field::Empty, target_url = tracing::field::Empty, method = tracing::field::Empty))]
+    #[instrument(level = "debug", skip(self, origin, target, message), fields(issuer = tracing::field::Empty, origin_url = tracing::field::Empty, inv_id = tracing::field::Empty, target_url = tracing::field::Empty, method = tracing::field::Empty, provider_id = tracing::field::Empty))]
     async fn inner_rpc<Target>(
         &self,
         origin: WasmCloudEntity,
@@ -280,13 +277,13 @@ impl RpcClient {
 
         // Record all of the fields on the span. To avoid extra allocations, we are only going to
         // record here after we generate/derive the values
-        #[cfg(feature = "otel")]
         let span = tracing::span::Span::current();
-        span_record!(span, "provider_id", &issuer);
-        span_record!(span, "method", &message.method);
-        span_record!(span, "lattice_id", lattice);
-        span_record!(span, "target_id", &target.public_key);
-        span_record!(span, "inv_id", &subject);
+        span.record("provider_id", &tracing::field::display(&issuer));
+        span.record("method", &tracing::field::display(&message.method));
+        span.record("lattice_id", &tracing::field::display(&lattice));
+        span.record("target_id", &tracing::field::display(&target.public_key));
+        span.record("subject", &tracing::field::display(&subject));
+        span.record("issuer", &tracing::field::display(&issuer));
 
         //debug!("rpc_client sending");
         let claims = Claims::<jwt::Invocation>::new(
@@ -302,7 +299,6 @@ impl RpcClient {
         let len = message.arg.len();
         let chunkify = chunkify::needs_chunking(len);
 
-        #[allow(unused_variables)]
         let (invocation, body) = {
             let mut inv = Invocation {
                 origin,
@@ -327,12 +323,9 @@ impl RpcClient {
             debug!(invocation_id = %inv_id, %len, "chunkifying invocation");
             // start chunking thread
             let lattice = lattice.to_string();
-            if let Err(error) = async_span!({
-                tokio::task::spawn_blocking(move || {
-                    let ce = chunkify::chunkify_endpoint(None, lattice)?;
-                    ce.chunkify(&inv_id, &mut body.as_slice())
-                })
-                .await
+            if let Err(error) = tokio::task::spawn_blocking(move || {
+                let ce = chunkify::chunkify_endpoint(None, lattice)?;
+                ce.chunkify(&inv_id, &mut body.as_slice())
             })
             .await
             .map_err(|join_e| RpcError::Other(join_e.to_string()))?
@@ -367,11 +360,7 @@ impl RpcClient {
             let this = self.clone();
             let topic_ = topic.clone();
             let payload = if let Some(timeout) = timeout {
-                match async_span!({
-                    tokio::time::timeout(timeout, this.request(topic, nats_body)).await
-                })
-                .await
-                {
+                match tokio::time::timeout(timeout, this.request(topic, nats_body)).await {
                     Err(elapsed) => {
                         #[cfg(feature = "prometheus")]
                         self.stats.rpc_sent_timeouts.inc();
@@ -381,7 +370,7 @@ impl RpcClient {
                     Ok(Err(err)) => Err(RpcError::Nats(err.to_string())),
                 }
             } else {
-                async_span!({ this.request(topic, nats_body).await })
+                this.request(topic, nats_body)
                     .await
                     .map_err(|e| RpcError::Nats(e.to_string()))
             }
@@ -411,12 +400,9 @@ impl RpcClient {
                         {
                             self.stats.rpc_sent_resp_chunky.inc();
                         }
-                        async_span!({
-                            tokio::task::spawn_blocking(move || {
-                                let ce = chunkify::chunkify_endpoint(None, lattice)?;
-                                ce.get_unchunkified_response(&inv_response.invocation_id)
-                            })
-                            .await
+                        tokio::task::spawn_blocking(move || {
+                            let ce = chunkify::chunkify_endpoint(None, lattice)?;
+                            ce.get_unchunkified_response(&inv_response.invocation_id)
                         })
                         .await
                         .map_err(|je| RpcError::Other(format!("join/resp-chunk: {}", je)))??
@@ -433,7 +419,7 @@ impl RpcClient {
                 }
             }
         } else {
-            async_span!({ self.publish(topic, nats_body).await })
+            self.publish(topic, nats_body)
                 .await
                 .map_err(|e| RpcError::Nats(format!("publish error: {}: {}", target_url, e)))?;
             Ok(Vec::new())
@@ -444,6 +430,7 @@ impl RpcClient {
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
     /// If this client has a default timeout, and a response is not received within
     /// the appropriate time, an error will be returned.
+    #[instrument(level = "debug", skip_all, fields(subject = %subject))]
     pub async fn request(&self, subject: String, payload: Vec<u8>) -> RpcResult<Vec<u8>> {
         #[cfg(feature = "otel")]
         let headers: Option<HeaderMap> = Some(OtelHeaderInjector::default_with_span().into());
@@ -451,12 +438,8 @@ impl RpcClient {
         let headers: Option<HeaderMap> = None;
 
         let nc = self.client();
-        #[cfg(feature = "otel")]
-        let child = tracing::debug_span!("nats request");
-        #[cfg(feature = "otel")]
-        span_record!(child, "subject", &subject);
-        match async_span!({
-            self.maybe_timeout(self.timeout, async move {
+        match self
+            .maybe_timeout(self.timeout, async move {
                 if let Some(headers) = headers {
                     nc.request_with_headers(subject, headers, payload.into()).await
                 } else {
@@ -464,8 +447,6 @@ impl RpcClient {
                 }
             })
             .await
-        })
-        .await
         {
             Err(error) => {
                 error!(%error, "sending request");
@@ -477,6 +458,7 @@ impl RpcClient {
 
     /// Send a nats message with no reply-to. Do not wait for a response.
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
+    #[instrument(level = "debug", skip_all, fields(subject = %subject))]
     pub async fn publish(&self, subject: String, payload: Vec<u8>) -> RpcResult<()> {
         #[cfg(feature = "otel")]
         let headers: Option<HeaderMap> = Some(OtelHeaderInjector::default_with_span().into());
@@ -484,9 +466,6 @@ impl RpcClient {
         let headers: Option<HeaderMap> = None;
 
         let nc = self.client();
-        #[cfg(feature = "otel")]
-        let child = tracing::debug_span!("publish");
-        span_record!(child, "subject", &subject);
         self.maybe_timeout(self.timeout, async move {
             if let Some(headers) = headers {
                 nc.publish_with_headers(subject, headers, payload.into())
@@ -518,15 +497,11 @@ impl RpcClient {
                 }
                 let msg = response.msg;
                 let lattice = lattice.to_string();
-                async_span!({
-                    tokio::task::spawn_blocking(move || {
-                        let ce = chunkify::chunkify_endpoint(None, lattice).map_err(|e| {
-                            format!("connecting for chunkifying: {}", &e.to_string())
-                        })?;
-                        ce.chunkify_response(&inv_id, &mut msg.as_slice())
-                            .map_err(|e| e.to_string())
-                    })
-                    .await
+                tokio::task::spawn_blocking(move || {
+                    let ce = chunkify::chunkify_endpoint(None, lattice)
+                        .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
+                    ce.chunkify_response(&inv_id, &mut msg.as_slice())
+                        .map_err(|e| e.to_string())
                 })
                 .await
                 .map_err(|je| format!("join/response-chunk: {}", je))??;
@@ -542,9 +517,7 @@ impl RpcClient {
 
         match crate::common::serialize(&response) {
             Ok(t) => {
-                if let Err(e) =
-                    async_span!({ self.client().publish(reply_to.clone(), t.into()).await }).await
-                {
+                if let Err(e) = self.client().publish(reply_to.clone(), t.into()).await {
                     error!(
                         %reply_to,
                         error = %e,
