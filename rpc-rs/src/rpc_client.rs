@@ -478,6 +478,8 @@ impl RpcClient {
             }
         })
         .await?;
+        // flush after publish to reduce delay
+        let _ = self.client().flush().await;
         Ok(())
     }
 
@@ -524,6 +526,7 @@ impl RpcClient {
                         "failed sending rpc response",
                     );
                 }
+                let _ = self.client().flush().await;
             }
             Err(e) => {
                 // extremely unlikely that InvocationResponse would fail to serialize
