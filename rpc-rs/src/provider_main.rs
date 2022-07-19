@@ -5,9 +5,12 @@ use std::str::FromStr;
 
 use once_cell::sync::OnceCell;
 #[cfg(feature = "otel")]
-use opentelemetry::sdk::{
-    trace::{self, IdGenerator, Sampler},
-    Resource,
+use opentelemetry::{
+    sdk::{
+        trace::{self, BatchSpanProcessor, IdGenerator, Sampler},
+        Resource,
+    },
+    trace::TracerProvider,
 };
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::{Protocol, WithExportConfig};
@@ -17,11 +20,7 @@ use tracing_subscriber::fmt::{
     time::SystemTime,
     FmtContext, FormatEvent, FormatFields,
 };
-use tracing_subscriber::{
-    layer::{Layered, SubscriberExt},
-    registry::LookupSpan,
-    EnvFilter, Layer, Registry,
-};
+use tracing_subscriber::{layer::SubscriberExt, registry::LookupSpan, EnvFilter, Layer};
 
 use crate::{
     core::HostData,
@@ -291,56 +290,17 @@ fn configure_tracing(_: String, structured_logging_enabled: bool) {
 fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
     let env_filter_layer = get_env_filter();
     let log_layer = get_log_layer(structured_logging_enabled);
-    let subscriber = tracing_subscriber::Registry::default()
+    let base_subscriber = tracing_subscriber::Registry::default()
         .with(env_filter_layer)
         .with(log_layer);
-    let res = if std::env::var_os("OTEL_TRACES_EXPORTER")
+    let exporter = std::env::var_os("OTEL_TRACES_EXPORTER")
         .unwrap_or_default()
-        .to_ascii_lowercase()
-        == "otlp"
-    {
-        let mut tracing_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .unwrap_or_else(|_| format!("http://localhost:55681{}", TRACING_PATH));
-        if !tracing_endpoint.ends_with(TRACING_PATH) {
-            tracing_endpoint.push_str(TRACING_PATH);
-        }
-        match opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .http()
-                    .with_endpoint(tracing_endpoint)
-                    .with_protocol(Protocol::HttpBinary),
-            )
-            .with_trace_config(
-                trace::config()
-                    .with_sampler(Sampler::AlwaysOn)
-                    .with_id_generator(IdGenerator::default())
-                    .with_max_events_per_span(64)
-                    .with_max_attributes_per_span(16)
-                    .with_max_events_per_span(16)
-                    .with_resource(Resource::new(vec![opentelemetry::KeyValue::new(
-                        "service.name",
-                        provider_name,
-                    )])),
-            )
-            .install_batch(opentelemetry::runtime::Tokio)
-        {
-            Ok(t) => tracing::subscriber::set_global_default(
-                subscriber.with(tracing_opentelemetry::layer().with_tracer(t)),
-            ),
-            Err(e) => {
-                eprintln!(
-                    "Unable to configure OTEL tracing, defaulting to logging only: {:?}",
-                    e
-                );
-                tracing::subscriber::set_global_default(subscriber)
-            }
-        }
-    } else {
-        tracing::subscriber::set_global_default(subscriber)
-    };
-    if let Err(e) = res {
+        .to_ascii_lowercase();
+    let maybe_tracing_layer = (exporter == "otlp")
+        .then_some(true)
+        .and_then(|_| get_tracing_layer(provider_name));
+    let subscriber = base_subscriber.with(maybe_tracing_layer);
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
         eprintln!(
             "Logger/tracer was already created by provider, continuing: {}",
             e
@@ -348,23 +308,86 @@ fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
     }
 }
 
-fn get_log_layer(structured_logging_enabled: bool) -> impl Layer<Layered<EnvFilter, Registry>> {
+#[cfg(feature = "otel")]
+fn get_tracing_layer<S>(provider_name: String) -> Option<Box<dyn Layer<S> + Send + Sync + 'static>>
+where
+    S: Subscriber + Send + Sync + for<'lookup> LookupSpan<'lookup>,
+{
+    let mut tracing_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| format!("http://localhost:55681{}", TRACING_PATH));
+    if !tracing_endpoint.ends_with(TRACING_PATH) {
+        tracing_endpoint.push_str(TRACING_PATH);
+    }
+
+    let exporter = match opentelemetry_otlp::SpanExporterBuilder::from(
+        opentelemetry_otlp::new_exporter()
+            .http()
+            .with_endpoint(tracing_endpoint)
+            .with_protocol(Protocol::HttpBinary),
+    )
+    .build_span_exporter()
+    {
+        Err(e) => {
+            eprintln!(
+                "Unable to configure OTEL tracing, defaulting to logging only: {:?}",
+                e
+            );
+            return None;
+        }
+        Ok(exporter) => exporter,
+    };
+
+    let batch_processor = BatchSpanProcessor::builder(exporter, opentelemetry::runtime::Tokio)
+        .with_max_queue_size(9999999999) // override default of 2048
+        .build();
+
+    let trace_config = trace::config()
+        .with_sampler(Sampler::AlwaysOn)
+        .with_id_generator(IdGenerator::default())
+        .with_max_events_per_span(64)
+        .with_max_attributes_per_span(16)
+        .with_max_events_per_span(16)
+        .with_resource(Resource::new(vec![opentelemetry::KeyValue::new(
+            "service.name",
+            provider_name,
+        )]));
+
+    let provider = trace::TracerProvider::builder()
+        .with_span_processor(batch_processor)
+        .with_config(trace_config)
+        .build();
+
+    let tracer =
+        provider.versioned_tracer("wasmbus-rpc-otlp", Some(env!("CARGO_PKG_VERSION")), None);
+    let _ = opentelemetry::global::set_tracer_provider(provider);
+    Some(tracing_opentelemetry::layer().with_tracer(tracer).boxed())
+}
+
+fn get_log_layer<S>(structured_logging_enabled: bool) -> Box<dyn Layer<S> + Send + Sync + 'static>
+where
+    S: Subscriber + Send + Sync + for<'lookup> LookupSpan<'lookup>,
+{
     let log_layer = tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)
         .with_ansi(atty::is(atty::Stream::Stderr));
     if structured_logging_enabled {
-        log_layer.event_format(JsonOrNot::Json(Format::default().json()))
+        log_layer.event_format(JsonOrNot::Json(Format::default().json())).boxed()
     } else {
-        log_layer.event_format(JsonOrNot::Not(Format::default()))
+        log_layer.event_format(JsonOrNot::Not(Format::default())).boxed()
     }
 }
 
-fn get_env_filter() -> EnvFilter {
+fn get_env_filter<S>() -> Box<dyn Layer<S> + Send + Sync + 'static>
+where
+    S: Subscriber + Send + Sync + for<'lookup> LookupSpan<'lookup>,
+{
     match EnvFilter::try_from_default_env() {
-        Ok(f) => f,
+        Ok(f) => f.boxed(),
         Err(e) => {
             eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
-            EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+            EnvFilter::default()
+                .add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+                .boxed()
         }
     }
 }
