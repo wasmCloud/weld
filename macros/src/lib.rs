@@ -183,7 +183,7 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
         let path_str = path.segments.to_token_stream().to_string();
         let id = format_ident!("{}Receiver", &path_str);
         methods.push(quote!(
-            #path_str => #id::dispatch(self, ctx, &message).await
+            #path_str => #id::dispatch(self, ctx, message).await
         ));
         trait_receiver_impl.push(quote!(
             impl #id for #ident { }
@@ -193,11 +193,11 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
         impl MessageDispatch for #ident {
-            async fn dispatch<'disp__,'ctx__,'msg__>(
-                &'disp__ self,
-                ctx: &'ctx__ Context,
-                message: Message<'msg__>,
-            ) -> std::result::Result<Message<'msg__>, RpcError> {
+            async fn dispatch(
+                &self,
+                ctx: &Context,
+                message: Message<'_>,
+            ) -> std::result::Result<Vec<u8>, RpcError> {
                 let (trait_name, trait_method) = message
                     .method
                     .rsplit_once('.')
@@ -225,7 +225,7 @@ fn gen_empty_dispatch(ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
         impl MessageDispatch for #ident {
-            async fn dispatch<'disp__,'ctx__,'msg__>(&'disp__ self, _ctx: &'ctx__ Context, message: wasmbus_rpc::common::Message<'msg__>) -> std::result::Result<Message<'msg__>, RpcError> {
+            async fn dispatch(&self, _ctx: &Context, message: wasmbus_rpc::common::Message<'_>) -> std::result::Result<Vec<u8>, RpcError> {
                 Err(RpcError::MethodNotHandled(message.method.to_string()))
             }
         }

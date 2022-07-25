@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(clippy::let_and_return)] // fixes some false-positive clippy warnings with feature flags
 
 //! common provider wasmbus support
 //!
@@ -488,8 +489,7 @@ impl HostBridge {
                 },
             )
             .instrument(tracing::debug_span!("dispatch", public_key = %inv.origin.public_key, operation = %inv.operation))
-            .await
-            .map(|m| m.arg.to_vec());
+            .await;
 
         #[cfg(feature = "prometheus")]
         match &rc {
