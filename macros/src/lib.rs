@@ -128,9 +128,9 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
             )
         });
         match resp {
-            Ok(wasmbus_rpc::common::Message { arg, .. }) => {
+            Ok(data) => {
                 unsafe {
-                    __guest_response(arg.as_ptr(), arg.len() as _);
+                    __guest_response(data.as_ptr(), data.len() as _);
                 }
                 1
             }
