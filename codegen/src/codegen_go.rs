@@ -784,9 +784,9 @@ impl<'model> GoCodeGen<'model> {
         let (fields, _is_numbered) = get_sorted_fields(ident, strukt)?;
         for member in fields.iter() {
             self.apply_documentation_traits(w, member.id(), member.traits());
-            let (field_name, _ser_name) = self.get_field_name_and_ser_name(member)?;
+            let (field_name, ser_name) = self.get_field_name_and_ser_name(member)?;
             let target = member.target();
-            let field_tags = "";
+            let field_tags = format!(r#"`json:"{}"`"#, ser_name);
             writeln!(
                 w,
                 "  {} {} {}",
