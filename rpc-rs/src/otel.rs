@@ -7,6 +7,7 @@ use opentelemetry::{
     propagation::{Extractor, Injector, TextMapPropagator},
     sdk::propagation::TraceContextPropagator,
 };
+use std::str::FromStr;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -36,11 +37,14 @@ impl<'a> OtelHeaderExtractor<'a> {
 
 impl<'a> Extractor for OtelHeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
-        self.inner.get(key).and_then(|s| s.to_str().ok())
+        self.inner.get(key).and_then(|s| s.iter().next().map(|v| v.as_str()))
     }
 
     fn keys(&self) -> Vec<&str> {
-        self.inner.keys().map(|s| s.as_str()).collect()
+        self.inner
+            .iter()
+            .map(|(k, _)| std::str::from_utf8(k.as_ref()).unwrap_or(""))
+            .collect()
     }
 }
 
@@ -93,12 +97,12 @@ impl Injector for OtelHeaderInjector {
         // probably ok for now as it is freed at the end, but I prefer telemetry stuff to be as
         // little overhead as possible. If anyone has a better idea of how to handle this, please PR
         // it in
-        let header_name = key.escape_default().to_string().into_bytes();
-        let escaped = value.escape_default().to_string().into_bytes();
+        let header_name = key.escape_default().to_string();
+        let escaped = value.escape_default().to_string();
         // SAFETY: All chars escaped above
         self.inner.insert(
-            async_nats::header::HeaderName::from_bytes(&header_name).unwrap(),
-            async_nats::HeaderValue::from_bytes(&escaped).unwrap(),
+            async_nats::HeaderName::from_str(header_name.as_str()).unwrap(),
+            async_nats::HeaderValue::from_str(escaped.as_str()).unwrap(),
         );
     }
 }
