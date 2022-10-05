@@ -18,7 +18,6 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 #[cfg(feature = "otel")]
 use crate::otel::OtelHeaderInjector;
-
 use crate::wascap::{jwt, prelude::Claims};
 use crate::{
     chunkify,
@@ -324,13 +323,8 @@ impl RpcClient {
             debug!(invocation_id = %inv_id, %len, "chunkifying invocation");
             // start chunking thread
             let lattice = lattice.to_string();
-            if let Err(error) = tokio::task::spawn_blocking(move || {
-                let ce = chunkify::chunkify_endpoint(None, lattice)?;
-                ce.chunkify(&inv_id, &mut body.as_slice())
-            })
-            .await
-            .map_err(|join_e| RpcError::Other(join_e.to_string()))?
-            {
+            let ce = chunkify::chunkify_endpoint(None, self.client(), lattice)?;
+            if let Err(error) = ce.chunkify(&inv_id, &mut body.as_slice()).await {
                 error!(%error, "chunking error");
                 return Err(RpcError::Other(error.to_string()));
             }
@@ -401,12 +395,8 @@ impl RpcClient {
                         {
                             self.stats.rpc_sent_resp_chunky.inc();
                         }
-                        tokio::task::spawn_blocking(move || {
-                            let ce = chunkify::chunkify_endpoint(None, lattice)?;
-                            ce.get_unchunkified_response(&inv_response.invocation_id)
-                        })
-                        .await
-                        .map_err(|je| RpcError::Other(format!("join/resp-chunk: {}", je)))??
+                        let ce = chunkify::chunkify_endpoint(None, self.client(), lattice)?;
+                        ce.get_unchunkified_response(&inv_response.invocation_id).await?
                     } else {
                         inv_response.msg
                     };
@@ -502,16 +492,12 @@ impl RpcClient {
                 {
                     self.stats.rpc_recv_resp_chunky.inc();
                 }
-                let msg = response.msg;
-                let lattice = lattice.to_string();
-                tokio::task::spawn_blocking(move || {
-                    let ce = chunkify::chunkify_endpoint(None, lattice)
-                        .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
-                    ce.chunkify_response(&inv_id, &mut msg.as_slice())
-                        .map_err(|e| e.to_string())
-                })
-                .await
-                .map_err(|je| format!("join/response-chunk: {}", je))??;
+                let buf = response.msg;
+                let ce = chunkify::chunkify_endpoint(None, self.client(), lattice.to_string())
+                    .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
+                ce.chunkify_response(&inv_id, &mut buf.as_slice())
+                    .await
+                    .map_err(|e| e.to_string())?;
                 InvocationResponse {
                     msg: Vec::new(),
                     content_length,
@@ -553,14 +539,9 @@ impl RpcClient {
                 self.stats.rpc_recv_chunky.inc();
             }
             let inv_id = inv.id.clone();
-            let lattice = lattice.to_string();
-            inv.msg = tokio::task::spawn_blocking(move || {
-                let ce = chunkify::chunkify_endpoint(None, lattice)
-                    .map_err(|e| format!("connecting for de-chunkifying: {}", &e.to_string()))?;
-                ce.get_unchunkified(&inv_id).map_err(|e| e.to_string())
-            })
-            .await
-            .map_err(|je| format!("join/dechunk-validate: {}", je))??;
+            let ce = chunkify::chunkify_endpoint(None, self.client(), lattice.to_string())
+                .map_err(|e| format!("connecting for de-chunkifying: {}", &e.to_string()))?;
+            inv.msg = ce.get_unchunkified(&inv_id).await.map_err(|e| e.to_string())?;
         }
         Ok(inv)
     }

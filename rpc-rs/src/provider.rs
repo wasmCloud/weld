@@ -145,33 +145,6 @@ pub struct HostBridge {
 }
 
 impl HostBridge {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn new_sync_client(&self) -> RpcResult<nats::Connection> {
-        let nats_addr = if !self.host_data.lattice_rpc_url.is_empty() {
-            self.host_data.lattice_rpc_url.as_str()
-        } else {
-            DEFAULT_NATS_ADDR
-        };
-        let nats_opts = match (
-            self.host_data.lattice_rpc_user_jwt.trim(),
-            self.host_data.lattice_rpc_user_seed.trim(),
-        ) {
-            ("", "") => nats::Options::default(),
-            (rpc_jwt, rpc_seed) => {
-                let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
-                let jwt = rpc_jwt.to_owned();
-                nats::Options::with_jwt(
-                    move || Ok(jwt.to_owned()),
-                    move |nonce| kp.sign(nonce).unwrap(),
-                )
-            }
-        };
-        // Connect to nats
-        nats_opts.max_reconnects(None).connect(nats_addr).map_err(|e| {
-            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
-        })
-    }
-
     pub(crate) fn new_client(
         nats: async_nats::Client,
         host_data: &HostData,
@@ -258,7 +231,7 @@ impl std::fmt::Debug for HostBridge {
 
 impl HostBridge {
     /// Returns a reference to the rpc client
-    fn rpc_client(&self) -> &RpcClient {
+    pub(crate) fn rpc_client(&self) -> &RpcClient {
         &self.rpc_client
     }
 
@@ -476,7 +449,7 @@ impl HostBridge {
         let (inv, claims) = self.rpc_client.validate_invocation(inv).await?;
         self.validate_provider_invocation(&inv, &claims).await?;
 
-        let rc = provider
+        match provider
             .dispatch(
                 &Context {
                     actor: Some(inv.origin.public_key.clone()),
@@ -488,18 +461,18 @@ impl HostBridge {
                 },
             )
             .instrument(tracing::debug_span!("dispatch", public_key = %inv.origin.public_key, operation = %inv.operation))
-            .await;
-
-        #[cfg(feature = "prometheus")]
-        match &rc {
-            Err(_) => {
+            .await {
+            Err(e) => {
+                #[cfg(feature = "prometheus")]
                 self.rpc_client.stats.rpc_recv_err.inc();
-            }
+                Err(e)
+            },
             Ok(vec) => {
+                #[cfg(feature = "prometheus")]
                 self.rpc_client.stats.rpc_recv_resp_bytes.inc_by(vec.len() as u64);
+                Ok(vec)
             }
         }
-        rc
     }
 
     async fn subscribe_shutdown<P>(
