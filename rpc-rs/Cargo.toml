@@ -66,7 +66,7 @@ opentelemetry-otlp = { version = "0.11", features = ["http-proto", "reqwest-clie
 
 prometheus = { version = "0.13", optional = true }
 
-#[dev-dependencies]
+[dev-dependencies]
 regex = "1"
 clap = { version = "4.0.9", features = ["derive"] }
 
