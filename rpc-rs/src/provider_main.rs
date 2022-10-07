@@ -78,6 +78,12 @@ pub fn get_host_bridge() -> &'static HostBridge {
     }
 }
 
+// like get_host_bridge but doesn't panic if it's not initialized
+// This could be a valid condition if RpcClient is used outside capability providers
+pub fn get_host_bridge_safe() -> Option<&'static HostBridge> {
+    BRIDGE.get()
+}
+
 #[doc(hidden)]
 /// Sets the bridge, return Err if it was already set
 pub(crate) fn set_host_bridge(hb: HostBridge) -> Result<(), ()> {

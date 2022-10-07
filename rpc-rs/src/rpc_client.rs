@@ -19,6 +19,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 #[cfg(feature = "otel")]
 use crate::otel::OtelHeaderInjector;
 
+use crate::provider_main::get_host_bridge_safe;
 use crate::wascap::{jwt, prelude::Claims};
 use crate::{
     chunkify,
@@ -279,14 +280,32 @@ impl RpcClient {
         // Record all of the fields on the span. To avoid extra allocations, we are only going to
         // record here after we generate/derive the values
         let span = tracing::span::Span::current();
-        span.record("provider_id", &tracing::field::display(&issuer));
+        if let Some(hb) = get_host_bridge_safe() {
+            span.record("provider_id", &tracing::field::display(hb.provider_key()));
+        }
         span.record("method", &tracing::field::display(&message.method));
         span.record("lattice_id", &tracing::field::display(&lattice));
-        span.record("target_id", &tracing::field::display(&target.public_key));
         span.record("subject", &tracing::field::display(&subject));
         span.record("issuer", &tracing::field::display(&issuer));
+        if !origin.public_key.is_empty() {
+            span.record("sender_key", &tracing::field::display(&origin.public_key));
+        }
+        if !target.contract_id.is_empty() {
+            span.record("contract_id", &tracing::field::display(&target.contract_id));
+        }
+        if !target.link_name.is_empty() {
+            span.record("link_name", &tracing::field::display(&target.link_name));
+        }
+        if !target.public_key.is_empty() {
+            span.record("target_key", &tracing::field::display(&target.public_key));
+        } else {
+            error!(op=%message.method, origin=?origin, "rpc send is missing target.public_key");
+            return Err(RpcError::Rpc(format!(
+                "rpc send is missing target public_key. op={}, origin={:?}",
+                &message.method, &origin
+            )));
+        }
 
-        //debug!("rpc_client sending");
         let claims = Claims::<jwt::Invocation>::new(
             issuer.clone(),
             subject.clone(),
@@ -642,14 +661,30 @@ pub fn with_connection_event_logging(
     use async_nats::Event;
     opts.event_callback(|event| async move {
         match event {
-            Event::Disconnect => warn!("nats client disconnected"),
-            Event::Reconnect => info!("nats client reconnected"),
-            Event::ClientError(err) => error!("nats client error: '{:?}'", err),
-            Event::ServerError(err) => error!("nats server error: '{:?}'", err),
-            Event::SlowConsumer(val) => warn!("nats slow consumer detected ({})", val),
-            Event::LameDuckMode => warn!("nats lame duck mode"),
+            Event::Disconnect => warn!("nats client disconnected{}", whoami()),
+            Event::Reconnect => info!("nats client reconnected{}", whoami()),
+            Event::ClientError(err) => error!("nats client error{}: '{:?}'", whoami(), err),
+            Event::ServerError(err) => error!("nats server error{}: '{:?}'", whoami(), err),
+            Event::SlowConsumer(val) => warn!("nats slow consumer detected{}: ({})", whoami(), val),
+            Event::LameDuckMode => warn!("nats lame duck mode{}", whoami()),
         }
     })
+}
+
+// get some basic info to add to logs
+// For capability providers, this should include the host id and the provider's public key
+// For users of rpc_client outside capability providers, this will return an empty string because there is no HostBridge.
+pub(crate) fn whoami() -> String {
+    if let Some(bridge) = get_host_bridge_safe() {
+        format!(
+            " lattice={} host={} provider={}",
+            bridge.lattice_prefix(),
+            bridge.host_id(),
+            bridge.provider_key(),
+        )
+    } else {
+        String::new()
+    }
 }
 
 #[derive(Clone)]
