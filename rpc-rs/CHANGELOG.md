@@ -1,5 +1,11 @@
 # wasmbus-rpc Changelog
 
+## 0.11.0
+
+- upgrade to async-nats 0.21.0 
+- additional logging on reconnect 
+ 
+
 ## 0.10.0
 
 - upgrade to async-nats 0.18.0

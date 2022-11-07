@@ -34,7 +34,7 @@ use crate::error::{RpcError, RpcResult};
 
 /// Maximum size of a message payload before it will be chunked
 /// Nats currently uses 128kb chunk size so this should be at least 128KB
-const CHUNK_THRESHOLD_BYTES: usize = 1024 * 700; // 700KB
+const CHUNK_THRESHOLD_BYTES: usize = 1024 * 900; // 900KB
 
 /// check if message payload needs to be chunked
 pub(crate) fn needs_chunking(payload_size: usize) -> bool {

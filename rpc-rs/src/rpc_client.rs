@@ -623,8 +623,8 @@ pub fn with_connection_event_logging(
     use async_nats::Event;
     opts.event_callback(|event| async move {
         match event {
-            Event::Disconnect => warn!("nats client disconnected"),
-            Event::Reconnect => info!("nats client reconnected"),
+            Event::Disconnected => warn!("nats client disconnected"),
+            Event::Connected => info!("nats client connected"),
             Event::ClientError(err) => error!("nats client error: '{:?}'", err),
             Event::ServerError(err) => error!("nats server error: '{:?}'", err),
             Event::SlowConsumer(val) => warn!("nats slow consumer detected ({})", val),
