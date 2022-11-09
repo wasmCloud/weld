@@ -194,6 +194,11 @@ impl HostBridge {
     pub fn link_name(&self) -> &str {
         self.host_data.link_name.as_str()
     }
+
+    /// returns the lattice id
+    pub fn lattice_prefix(&self) -> &str {
+        &self.host_data.lattice_rpc_prefix
+    }
 }
 
 impl Deref for HostBridge {
@@ -455,7 +460,7 @@ impl HostBridge {
         let (inv, claims) = self.rpc_client.validate_invocation(inv).await?;
         self.validate_provider_invocation(&inv, &claims).await?;
 
-        match provider
+        let resp = provider
             .dispatch(
                 &Context {
                     actor: Some(inv.origin.public_key.clone()),
@@ -467,18 +472,13 @@ impl HostBridge {
                 },
             )
             .instrument(tracing::debug_span!("dispatch", public_key = %inv.origin.public_key, operation = %inv.operation))
-            .await {
-            Err(e) => {
-                #[cfg(feature = "prometheus")]
-                self.rpc_client.stats.rpc_recv_err.inc();
-                Err(e)
-            },
-            Ok(vec) => {
-                #[cfg(feature = "prometheus")]
-                self.rpc_client.stats.rpc_recv_resp_bytes.inc_by(vec.len() as u64);
-                Ok(vec)
-            }
+            .await;
+        #[cfg(feature = "prometheus")]
+        match &resp {
+            Err(_) => self.rpc_client.stats.rpc_recv_err.inc(),
+            Ok(vec) => self.rpc_client.stats.rpc_recv_resp_bytes.inc_by(vec.len() as u64),
         }
+        resp
     }
 
     async fn subscribe_shutdown<P>(
