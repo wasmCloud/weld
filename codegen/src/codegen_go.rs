@@ -30,7 +30,7 @@ use crate::{
     gen::CodeGen,
     model::{
         get_operation, get_sorted_fields, get_trait, is_opt_namespace, value_to_json,
-        wasmcloud_core_namespace, wasmcloud_model_namespace, CommentKind, PackageName, Ty,
+        wasmcloud_actor_namespace, wasmcloud_core_namespace, wasmcloud_model_namespace, CommentKind, PackageName, Ty,
     },
     render::Renderer,
     writer::Writer,
@@ -346,13 +346,15 @@ impl<'model> CodeGen for GoCodeGen<'model> {
             w,
             r#"package {}
             import (
-                {}
                 msgpack "github.com/wasmcloud/tinygo-msgpack" //nolint
                 cbor "github.com/wasmcloud/tinygo-cbor" //nolint
+                {}
             )"#,
             &self.package,
-            if ns != wasmcloud_model_namespace() && ns != wasmcloud_core_namespace() {
+            if ns == wasmcloud_actor_namespace() {
                 "core \"github.com/wasmcloud/interfaces/core/tinygo\" //nolint"
+            } else if ns != wasmcloud_model_namespace() && ns != wasmcloud_core_namespace() {
+                "actor \"github.com/wasmcloud/actor-tinygo\" //nolint"
             } else {
                 // avoid circular dependencies - core and model are part of the actor-tinygo package
                 ""
