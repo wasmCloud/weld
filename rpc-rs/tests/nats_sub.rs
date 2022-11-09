@@ -4,6 +4,7 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 use test_log::test;
+use tracing::{debug, error, info};
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
@@ -59,7 +60,7 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
         while let Some(msg) = sub.next().await {
             let payload = String::from_utf8_lossy(&msg.payload);
             if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
-                println!("ERROR: payload on {}: {}", subject, &payload);
+                error!("payload on {}: {}", subject, &payload);
             }
             if let Some(reply_to) = msg.reply {
                 client.publish(reply_to, b"ok".to_vec()).await.expect("reply");
@@ -69,7 +70,7 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
             }
             count += 1;
         }
-        println!("received {} message(s)", count);
+        info!("listener received {} message(s)", count);
         count
     })
 }
@@ -87,7 +88,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             let response = format!("{}", size);
             if let Some(reply_to) = msg.reply {
                 if let Err(e) = nc.publish(reply_to, response.as_bytes().to_vec().into()).await {
-                    eprintln!("error publishing subscriber response: {}", e);
+                    error!("error publishing subscriber response: {}", e);
                 }
             }
             count += 1;
@@ -96,7 +97,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             }
         }
         let _ = sub.unsubscribe().await;
-        eprintln!("listen_bin exiting with count {}", count);
+        info!("listen_bin exiting with count {}", count);
         count
     })
 }
@@ -123,11 +124,11 @@ async fn listen_queue(
         while let Some(msg) = sub.next().await {
             let payload = String::from_utf8_lossy(&msg.payload);
             if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
-                eprintln!("ERROR: payload on {}: {}", &subject, &payload);
+                error!("payload on {}: {}", &subject, &payload);
                 break;
             }
             if let Some(reply_to) = msg.reply {
-                eprintln!("listener {} replying ok", &subject);
+                debug!("listener {} replying ok", &subject);
                 client.publish(reply_to, b"ok".to_vec()).await.expect("reply");
             }
             if &payload == "exit" {
@@ -136,7 +137,7 @@ async fn listen_queue(
             }
             count += 1;
         }
-        println!("subscriber '{}' exiting count={}", &subject, count);
+        info!("subscriber '{}' exiting count={}", &subject, count);
         count
     })
 }
@@ -159,7 +160,7 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// send large messages - this uses request() and does not test chunking
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     // create unique subscription name for this test
     let sub_name = uuid::Uuid::new_v4().to_string();
@@ -186,11 +187,11 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
         let resp = match tokio::time::timeout(FIVE_SEC, sender.request(topic.clone(), data)).await {
             Ok(Ok(result)) => result,
             Ok(Err(rpc_err)) => {
-                eprintln!("send error on msg size {}: {}", *size, rpc_err);
+                error!("send error on msg size {}: {}", *size, rpc_err);
                 continue;
             }
             Err(timeout_err) => {
-                eprintln!(
+                error!(
                     "rpc timeout: sending msg of size {}: {}",
                     *size, timeout_err
                 );
@@ -200,10 +201,10 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
         let sbody = String::from_utf8_lossy(&resp);
         let received_size = sbody.parse::<u32>().expect("response contains int size");
         if *size == received_size {
-            eprintln!("PASS: message_size: {}", size);
+            info!("PASS: message_size: {}", size);
             pass_count += 1;
         } else {
-            eprintln!("FAIL: message_size: {}, got: {}", size, received_size);
+            error!("FAIL: message_size: {}, got: {}", size, received_size);
         }
     }
     assert_eq!(pass_count, test_sizes.len(), "some size tests did not pass");
@@ -229,7 +230,7 @@ fn check_ok(data: Vec<u8>) -> Result<(), RpcError> {
     }
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     // in this test, there are two queue subscribers.
     // on topic "one..." with the same queue group X,
