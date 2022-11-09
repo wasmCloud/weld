@@ -4,7 +4,6 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 use test_log::test;
-use tracing::error;
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
@@ -12,7 +11,6 @@ use wasmbus_rpc::{
 };
 
 const ONE_SEC: Duration = Duration::from_secs(1);
-const THREE_SEC: Duration = Duration::from_secs(3);
 const FIVE_SEC: Duration = Duration::from_secs(5);
 const TEST_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 const HOST_ID: &str = "HOST_test_nats_sub";
@@ -177,16 +175,15 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
         // don't abuse it by running this test with very large sizes
         //
         // The last size must be 1 to signal to listen_bin to exit
-        &[10u32, 25, 100, 200, 500, 1000, 8000, 1]
+        &[10u32, 100, 200, 500, 1000, 8000, 1]
     } else {
         // The last size must be 1 to signal to listen_bin to exit
-        &[10u32, 25, 500, 10_000, 800_000, 1_000_000, 1_200_000, 1]
+        &[10u32, 25, 500, 10_000, 800_000, 1_000_000, 1]
     };
     for size in test_sizes.iter() {
         let mut data = Vec::with_capacity(*size as usize);
         data.resize(*size as usize, 255u8);
-        let resp = match tokio::time::timeout(FIVE_SEC, sender.request(topic.clone(), data)).await
-        {
+        let resp = match tokio::time::timeout(FIVE_SEC, sender.request(topic.clone(), data)).await {
             Ok(Ok(result)) => result,
             Ok(Err(rpc_err)) => {
                 eprintln!("send error on msg size {}: {}", *size, rpc_err);

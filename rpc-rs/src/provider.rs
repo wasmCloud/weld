@@ -159,7 +159,7 @@ impl HostBridge {
         let rpc_client = RpcClient::new_client(
             nats,
             host_data.host_id.clone(),
-            host_data.default_rpc_timeout_ms.map(|ms| Duration::from_millis(ms as u64)),
+            host_data.default_rpc_timeout_ms.map(Duration::from_millis),
             key.clone(),
         );
 
@@ -710,7 +710,7 @@ impl<'send> ProviderTransport<'send> {
             bridge
                 .host_data
                 .default_rpc_timeout_ms
-                .map(|t| Duration::from_millis(t as u64))
+                .map(Duration::from_millis)
                 .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
         }));
         Self { bridge, ld, timeout }
@@ -736,7 +736,7 @@ impl<'send> Transport for ProviderTransport<'send> {
                 self.bridge
                     .host_data
                     .default_rpc_timeout_ms
-                    .map(|t| Duration::from_millis(t as u64))
+                    .map(Duration::from_millis)
                     .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
             }
         };
