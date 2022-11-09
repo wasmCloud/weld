@@ -138,10 +138,7 @@ impl ChunkEndpoint {
                 .js
                 .create_object_store(Config {
                     bucket: self.lattice.clone(),
-                    description: None,
-                    max_age: Default::default(),
-                    storage: Default::default(),
-                    num_replicas: 0, //..Default::default()
+                    ..Default::default()
                 })
                 .await
                 .map_err(|e| RpcError::Nats(format!("Failed to create store: {}", &e)))?,
