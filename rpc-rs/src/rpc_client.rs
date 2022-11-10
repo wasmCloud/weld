@@ -16,11 +16,12 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use tracing::{debug, error, info, instrument, trace, warn};
 
+use crate::chunkify::ChunkEndpoint;
 #[cfg(feature = "otel")]
 use crate::otel::OtelHeaderInjector;
 use crate::wascap::{jwt, prelude::Claims};
 use crate::{
-    chunkify,
+    chunkify::needs_chunking,
     common::Message,
     core::{Invocation, InvocationResponse, WasmCloudEntity},
     error::{RpcError, RpcResult},
@@ -297,7 +298,7 @@ impl RpcClient {
         let topic = rpc_topic(&target, lattice);
         let method = message.method.to_string();
         let len = message.arg.len();
-        let chunkify = chunkify::needs_chunking(len);
+        let chunkify = needs_chunking(len);
 
         let (invocation, body) = {
             let mut inv = Invocation {
@@ -323,8 +324,10 @@ impl RpcClient {
             debug!(invocation_id = %inv_id, %len, "chunkifying invocation");
             // start chunking thread
             let lattice = lattice.to_string();
-            let ce = chunkify::chunkify_endpoint(None, self.client(), lattice)?;
-            if let Err(error) = ce.chunkify(&inv_id, &mut body.as_slice()).await {
+            if let Err(error) = ChunkEndpoint::with_client(lattice, self.client(), None)
+                .chunkify(&inv_id, &mut body.as_slice())
+                .await
+            {
                 error!(%error, "chunking error");
                 return Err(RpcError::Other(error.to_string()));
             }
@@ -395,8 +398,9 @@ impl RpcClient {
                         {
                             self.stats.rpc_sent_resp_chunky.inc();
                         }
-                        let ce = chunkify::chunkify_endpoint(None, self.client(), lattice)?;
-                        ce.get_unchunkified_response(&inv_response.invocation_id).await?
+                        ChunkEndpoint::with_client(lattice, self.client(), None)
+                            .get_unchunkified_response(&inv_response.invocation_id)
+                            .await?
                     } else {
                         inv_response.msg
                     };
@@ -483,21 +487,19 @@ impl RpcClient {
         reply_to: String,
         response: InvocationResponse,
         lattice: &str,
-    ) -> Result<(), String> {
+    ) -> RpcResult<()> {
         let content_length = Some(response.msg.len() as u64);
         let response = {
             let inv_id = response.invocation_id.clone();
-            if chunkify::needs_chunking(response.msg.len()) {
+            if needs_chunking(response.msg.len()) {
                 #[cfg(feature = "prometheus")]
                 {
                     self.stats.rpc_recv_resp_chunky.inc();
                 }
                 let buf = response.msg;
-                let ce = chunkify::chunkify_endpoint(None, self.client(), lattice.to_string())
-                    .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
-                ce.chunkify_response(&inv_id, &mut buf.as_slice())
-                    .await
-                    .map_err(|e| e.to_string())?;
+                ChunkEndpoint::with_client(lattice.to_string(), self.client(), None)
+                    .chunkify_response(&inv_id, &mut buf.as_slice())
+                    .await?;
                 InvocationResponse {
                     msg: Vec::new(),
                     content_length,
@@ -511,25 +513,25 @@ impl RpcClient {
         match crate::common::serialize(&response) {
             Ok(t) => {
                 if let Err(e) = self.client().publish(reply_to.clone(), t.into()).await {
-                    error!(
-                        %reply_to,
-                        error = %e,
-                        "failed sending rpc response",
-                    );
+                    Err(RpcError::Nats(format!(
+                        "publish rpc response to '{}: {}",
+                        reply_to, e
+                    )))
+                } else {
+                    let nc = self.client();
+                    tokio::spawn(async move {
+                        if let Err(error) = nc.flush().await {
+                            error!(%error, "flush after publishing invocation response");
+                        }
+                    });
+                    Ok(())
                 }
-                let nc = self.client();
-                tokio::spawn(async move {
-                    if let Err(error) = nc.flush().await {
-                        error!(%error, "flush after publishing invocation response");
-                    }
-                });
             }
             Err(e) => {
                 // extremely unlikely that InvocationResponse would fail to serialize
-                error!(error = %e, "failed serializing InvocationResponse");
+                Err(RpcError::Ser(format!("InvocationResponse: {}", e)))
             }
         }
-        Ok(())
     }
 
     pub async fn dechunk(&self, mut inv: Invocation, lattice: &str) -> RpcResult<Invocation> {
@@ -538,10 +540,10 @@ impl RpcClient {
             {
                 self.stats.rpc_recv_chunky.inc();
             }
-            let inv_id = inv.id.clone();
-            let ce = chunkify::chunkify_endpoint(None, self.client(), lattice.to_string())
-                .map_err(|e| format!("connecting for de-chunkifying: {}", &e.to_string()))?;
-            inv.msg = ce.get_unchunkified(&inv_id).await.map_err(|e| e.to_string())?;
+            inv.msg = ChunkEndpoint::with_client(lattice.to_string(), self.client(), None)
+                .get_unchunkified(&inv.id.clone())
+                .await
+                .map_err(|e| e.to_string())?;
         }
         Ok(inv)
     }

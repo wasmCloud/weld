@@ -68,6 +68,15 @@ impl ChunkEndpoint {
         ChunkEndpoint { lattice, js }
     }
 
+    pub(crate) fn with_client(
+        lattice: String,
+        nc: async_nats::Client,
+        domain: Option<String>,
+    ) -> Self {
+        let js = connect_js(domain, nc, &lattice);
+        ChunkEndpoint::new(lattice, js)
+    }
+
     /// load the message after de-chunking
     #[instrument(level = "trace", skip(self))]
     pub async fn get_unchunkified(&self, inv_id: &str) -> RpcResult<Vec<u8>> {
@@ -147,25 +156,14 @@ impl ChunkEndpoint {
     }
 }
 
-pub(crate) fn chunkify_endpoint(
-    domain: Option<String>,
-    nc: async_nats::Client,
-    lattice: String,
-) -> RpcResult<ChunkEndpoint> {
-    let js = connect_js(domain, nc, &lattice)?;
-    Ok(ChunkEndpoint::new(lattice, js))
-}
-
 pub(crate) fn connect_js(
     domain: Option<String>,
     nc: async_nats::Client,
     lattice_prefix: &str,
-) -> RpcResult<Context> {
+) -> Context {
     let map = jetstream_map();
-    let mut _w = map.write().unwrap(); // panics if lock is poisioned
-    let js: Context = if let Some(js) = _w.get(lattice_prefix) {
-        js.clone()
-    } else {
+    let mut _w = map.write().unwrap(); // panics if lock is poisoned
+    _w.get(lattice_prefix).cloned().unwrap_or_else(|| {
         let js = if let Some(domain) = domain {
             jetstream::with_domain(nc, domain)
         } else {
@@ -173,6 +171,5 @@ pub(crate) fn connect_js(
         };
         _w.insert(lattice_prefix.to_string(), js.clone());
         js
-    };
-    Ok(js)
+    })
 }
