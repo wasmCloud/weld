@@ -17,7 +17,7 @@ const TEST_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
 fn nats_url() -> String {
-    std::env::var("NATS_URL").unwrap_or_else(|| TEST_NATS_ADDR.into())
+    std::env::var("NATS_URL").unwrap_or_else(|_| TEST_NATS_ADDR.into())
 }
 
 fn is_demo() -> bool {
