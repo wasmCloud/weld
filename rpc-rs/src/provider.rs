@@ -390,9 +390,9 @@ impl HostBridge {
                                     #[cfg(feature = "prometheus")]
                                     {
                                         if let Some(len) = inv.content_length {
-                                            self.rpc_client.stats.rpc_recv_bytes.inc_by(len);
+                                            this.rpc_client.stats.rpc_recv_bytes.inc_by(len);
                                         }
-                                        self.rpc_client.stats.rpc_recv.inc();
+                                        this.rpc_client.stats.rpc_recv.inc();
                                     }
                                     let inv_id = inv.id.clone();
                                     let resp = match this.handle_rpc(provider.clone(), inv).in_current_span().await {
@@ -511,7 +511,7 @@ impl HostBridge {
                 // Backwards compatibility - if no host (or payload) is supplied, default
                 // to shutting down unconditionally
                 if shutmsg.host_id.is_empty() {
-                    warn!("Please upgrade your wasmcloud host to >= 0.58.3 if you use lattices with multiple hosts.")
+                    warn!("Please upgrade your wasmcloud host to >= 0.59.0 if you use lattices with multiple hosts.")
                 }
                 if shutmsg.host_id == self.host_data.host_id || shutmsg.host_id.is_empty() {
                     info!("Received termination signal and stopping");
