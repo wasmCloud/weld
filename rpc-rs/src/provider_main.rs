@@ -68,14 +68,11 @@ static BRIDGE: OnceCell<HostBridge> = OnceCell::new();
 
 // this may be called any time after initialization
 pub fn get_host_bridge() -> &'static HostBridge {
-    match BRIDGE.get() {
-        Some(b) => b,
-        None => {
-            // initialized first thing, so this shouldn't happen
-            eprintln!("BRIDGE not initialized");
-            panic!();
-        }
-    }
+    BRIDGE.get().unwrap_or_else(|| {
+        // initialized first thing, so this shouldn't happen
+        eprintln!("BRIDGE not initialized");
+        panic!();
+    })
 }
 
 #[doc(hidden)]
@@ -370,11 +367,8 @@ fn get_log_layer(structured_logging_enabled: bool) -> impl Layer<Layered<EnvFilt
 }
 
 fn get_env_filter() -> EnvFilter {
-    match EnvFilter::try_from_default_env() {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
-            EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
-        }
-    }
+    EnvFilter::try_from_default_env().unwrap_or_else(|e| {
+        eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
+        EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+    })
 }

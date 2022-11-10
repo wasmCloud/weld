@@ -384,10 +384,8 @@ impl RpcClient {
             match inv_response.error {
                 None => {
                     #[cfg(feature = "prometheus")]
-                    {
-                        if let Some(len) = inv_response.content_length {
-                            self.stats.rpc_sent_resp_bytes.inc_by(len);
-                        }
+                    if let Some(len) = inv_response.content_length {
+                        self.stats.rpc_sent_resp_bytes.inc_by(len);
                     }
                     // was response chunked?
                     let msg = if inv_response.content_length.is_some()
@@ -474,6 +472,10 @@ impl RpcClient {
         })
         .await?;
         let nc = self.client();
+        // TODO: revisit after doing some performance tuning and review of callers of pubish().
+        // For high throughput use cases, it may be better to change the flush interval timer
+        // instead of flushing after every publish.
+        // Flushing here is good for low traffic use cases when optimizing for latency.
         tokio::spawn(async move {
             if let Err(error) = nc.flush().await {
                 error!(%error, "flush after publish");
@@ -511,22 +513,7 @@ impl RpcClient {
         };
 
         match crate::common::serialize(&response) {
-            Ok(t) => {
-                if let Err(e) = self.client().publish(reply_to.clone(), t.into()).await {
-                    Err(RpcError::Nats(format!(
-                        "publish rpc response to '{}: {}",
-                        reply_to, e
-                    )))
-                } else {
-                    let nc = self.client();
-                    tokio::spawn(async move {
-                        if let Err(error) = nc.flush().await {
-                            error!(%error, "flush after publishing invocation response");
-                        }
-                    });
-                    Ok(())
-                }
-            }
+            Ok(t) => Ok(self.publish(reply_to, t).await?),
             Err(e) => {
                 // extremely unlikely that InvocationResponse would fail to serialize
                 Err(RpcError::Ser(format!("InvocationResponse: {}", e)))

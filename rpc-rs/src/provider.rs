@@ -357,10 +357,7 @@ impl HostBridge {
                         break;
                     },
                     nats_msg = sub.next() => {
-                        let msg = match nats_msg {
-                            None => break,
-                            Some(msg) => msg
-                        };
+                        let msg = if let Some(msg) = nats_msg { msg } else { break; };
                         let this = this.clone();
                         let provider = provider.clone();
                         let lattice = lattice.clone();
@@ -380,7 +377,6 @@ impl HostBridge {
                             crate::otel::attach_span_context(&msg);
                             match crate::common::deserialize::<Invocation>(&msg.payload) {
                                 Ok(inv) => {
-                                    let inv_id = inv.id.clone();
                                     let current = tracing::Span::current();
                                     current.record("operation", &tracing::field::display(&inv.operation));
                                     current.record("lattice_id", &tracing::field::display(&lattice));
@@ -391,13 +387,19 @@ impl HostBridge {
                                     current.record("contract_id", &tracing::field::display(&inv.target.contract_id));
                                     current.record("link_name", &tracing::field::display(&inv.target.link_name));
                                     current.record("payload_size", &tracing::field::display(&inv.content_length.unwrap_or_default()));
-                                    let provider = provider.clone();
-                                    let resp = match this.handle_rpc(provider, inv).in_current_span().await {
+                                    #[cfg(feature = "prometheus")]
+                                    {
+                                        if let Some(len) = inv.content_length {
+                                            self.rpc_client.stats.rpc_recv_bytes.inc_by(len);
+                                        }
+                                        self.rpc_client.stats.rpc_recv.inc();
+                                    }
+                                    let inv_id = inv.id.clone();
+                                    let resp = match this.handle_rpc(provider.clone(), inv).in_current_span().await {
                                         Err(error) => {
-                                            error!(
-                                                %error,
-                                                "Invocation failed"
-                                            );
+                                            error!(%error, "Invocation failed");
+                                            #[cfg(feature = "prometheus")]
+                                            this.rpc_client.stats.rpc_recv_err.inc();
                                             InvocationResponse{
                                                 invocation_id: inv_id,
                                                 error: Some(error.to_string()),
@@ -405,6 +407,8 @@ impl HostBridge {
                                             }
                                         },
                                         Ok(bytes) => {
+                                            #[cfg(feature = "prometheus")]
+                                            this.rpc_client.stats.rpc_recv_resp_bytes.inc_by(bytes.len() as u64);
                                             InvocationResponse{
                                                 invocation_id: inv_id,
                                                 content_length: Some(bytes.len() as u64),
@@ -416,7 +420,7 @@ impl HostBridge {
                                     if let Some(reply) = msg.reply {
                                         // send reply
                                         if let Err(error) = this.rpc_client()
-                                        .publish_invocation_response(reply, resp, &lattice).in_current_span().await {
+                                            .publish_invocation_response(reply, resp, &lattice).in_current_span().await {
                                             error!(%error, "rpc sending response");
                                         }
                                     }
@@ -431,7 +435,7 @@ impl HostBridge {
                                             },
                                             &lattice
                                         ).in_current_span().await {
-                                            error!(error = %e, "unable to publish error message to invocation response");
+                                            error!(error = %e, "unable to publish invocation response error");
                                         }
                                     }
                                 }
@@ -459,8 +463,7 @@ impl HostBridge {
         let inv = self.rpc_client().dechunk(inv, lattice).await?;
         let (inv, claims) = self.rpc_client.validate_invocation(inv).await?;
         self.validate_provider_invocation(&inv, &claims).await?;
-
-        let resp = provider
+        provider
             .dispatch(
                 &Context {
                     actor: Some(inv.origin.public_key.clone()),
@@ -472,13 +475,7 @@ impl HostBridge {
                 },
             )
             .instrument(tracing::debug_span!("dispatch", public_key = %inv.origin.public_key, operation = %inv.operation))
-            .await;
-        #[cfg(feature = "prometheus")]
-        match &resp {
-            Err(_) => self.rpc_client.stats.rpc_recv_err.inc(),
-            Ok(vec) => self.rpc_client.stats.rpc_recv_resp_bytes.inc_by(vec.len() as u64),
-        }
-        resp
+            .await
     }
 
     async fn subscribe_shutdown<P>(
@@ -513,16 +510,19 @@ impl HostBridge {
                 let shutmsg: ShutdownMessage = serde_json::from_slice(&payload).unwrap_or_default();
                 // Backwards compatibility - if no host (or payload) is supplied, default
                 // to shutting down unconditionally
+                if shutmsg.host_id.is_empty() {
+                    warn!("Please upgrade your wasmcloud host to >= 0.58.3 if you use lattices with multiple hosts.")
+                }
                 if shutmsg.host_id == self.host_data.host_id || shutmsg.host_id.is_empty() {
                     info!("Received termination signal and stopping");
                     // Tell provider to shutdown - before we shut down nats subscriptions,
                     // in case it needs to do any message passing during shutdown
-                    if let Err(e) = provider.shutdown().await {
-                        error!(error = %e, "got error during provider shutdown processing");
+                    if let Err(error) = provider.shutdown().await {
+                        error!(%error, "got error during provider shutdown processing");
                     }
                     let data = b"shutting down".to_vec();
-                    if let Err(e) = self.rpc_client().publish(reply_to, data).await {
-                        error!(error = %e, "failed to send shutdown ack");
+                    if let Err(error) = self.rpc_client().publish(reply_to, data).await {
+                        warn!(%error, "failed to send shutdown ack");
                     }
                     // unsubscribe from shutdown topic
                     let _ = sub.unsubscribe().await;
@@ -639,16 +639,13 @@ impl HostBridge {
         let this = self.clone();
         process_until_quit!(sub, quit, msg, {
             let arg = HealthCheckRequest {};
-            let resp = match provider.health_request(&arg).await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!(error = %e, "error generating health check response");
-                    HealthCheckResponse {
-                        healthy: false,
-                        message: Some(e.to_string()),
-                    }
+            let resp = provider.health_request(&arg).await.unwrap_or_else(|e| {
+                error!(error = %e, "error generating health check response");
+                HealthCheckResponse {
+                    healthy: false,
+                    message: Some(e.to_string()),
                 }
-            };
+            });
             let buf = if this.host_data.is_test() {
                 Ok(serde_json::to_vec(&resp).unwrap())
             } else {

@@ -10,7 +10,7 @@ documentation = "https://docs.rs/wasmbus-rpc"
 readme = "README.md"
 edition = "2021"
 # MSRV
-rust-version = "1.58.1"
+rust-version = "1.64"
 
 # don't push build.rs
 exclude = [ "build.rs" ]

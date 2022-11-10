@@ -73,7 +73,17 @@ impl ChunkEndpoint {
         nc: async_nats::Client,
         domain: Option<String>,
     ) -> Self {
-        let js = connect_js(domain, nc, &lattice);
+        let map = jetstream_map();
+        let mut _w = map.write().unwrap(); // panics if lock is poisoned
+        let js = _w.get(&lattice).cloned().unwrap_or_else(|| {
+            let js = if let Some(domain) = domain {
+                jetstream::with_domain(nc, domain)
+            } else {
+                jetstream::new(nc)
+            };
+            _w.insert(lattice.clone(), js.clone());
+            js
+        });
         ChunkEndpoint::new(lattice, js)
     }
 
@@ -154,22 +164,4 @@ impl ChunkEndpoint {
         };
         Ok(store)
     }
-}
-
-pub(crate) fn connect_js(
-    domain: Option<String>,
-    nc: async_nats::Client,
-    lattice_prefix: &str,
-) -> Context {
-    let map = jetstream_map();
-    let mut _w = map.write().unwrap(); // panics if lock is poisoned
-    _w.get(lattice_prefix).cloned().unwrap_or_else(|| {
-        let js = if let Some(domain) = domain {
-            jetstream::with_domain(nc, domain)
-        } else {
-            jetstream::new(nc)
-        };
-        _w.insert(lattice_prefix.to_string(), js.clone());
-        js
-    })
 }
