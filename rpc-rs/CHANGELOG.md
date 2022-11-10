@@ -1,9 +1,10 @@
 # wasmbus-rpc Changelog
 
-## 0.11.0
+## 0.11.0-alpha.1
 
-- upgrade to async-nats 0.21.0 
+- upgrade to async-nats 0.22.0 
 - additional logging on reconnect 
+- add json tags to generated tinygo struct declarations
  
 
 ## 0.10.0
