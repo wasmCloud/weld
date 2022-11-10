@@ -30,7 +30,8 @@ use crate::{
     gen::CodeGen,
     model::{
         get_operation, get_sorted_fields, get_trait, is_opt_namespace, value_to_json,
-        wasmcloud_actor_namespace, wasmcloud_core_namespace, wasmcloud_model_namespace, CommentKind, PackageName, Ty,
+        wasmcloud_actor_namespace, wasmcloud_core_namespace, wasmcloud_model_namespace,
+        CommentKind, PackageName, Ty,
     },
     render::Renderer,
     writer::Writer,
