@@ -5,6 +5,7 @@
 - upgrade to async-nats 0.22.0 
 - additional logging on reconnect 
 - add json tags to generated tinygo struct declarations
+- bumped chunkify threshold to 900KiB \(900\*1024\) to match host threshold
  
 
 ## 0.10.0

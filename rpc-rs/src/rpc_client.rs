@@ -16,15 +16,15 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use tracing::{debug, error, info, instrument, trace, warn};
 
-use crate::chunkify::ChunkEndpoint;
 #[cfg(feature = "otel")]
 use crate::otel::OtelHeaderInjector;
-use crate::wascap::{jwt, prelude::Claims};
 use crate::{
-    chunkify::needs_chunking,
+    chunkify::{needs_chunking, ChunkEndpoint},
     common::Message,
     core::{Invocation, InvocationResponse, WasmCloudEntity},
     error::{RpcError, RpcResult},
+    provider_main::get_host_bridge_safe,
+    wascap::{jwt, prelude::Claims},
 };
 
 pub(crate) const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
@@ -256,7 +256,7 @@ impl RpcClient {
     }
 
     /// request or publish an rpc invocation
-    #[instrument(level = "debug", skip(self, origin, target, message), fields(issuer = tracing::field::Empty, origin_url = tracing::field::Empty, inv_id = tracing::field::Empty, target_url = tracing::field::Empty, method = tracing::field::Empty, provider_id = tracing::field::Empty))]
+    #[instrument(level = "debug", skip(self, origin, target, message), fields( provider_id = tracing::field::Empty, method = tracing::field::Empty, lattice_id = tracing::field::Empty, subject = tracing::field::Empty, issuer = tracing::field::Empty, sender_key = tracing::field::Empty, contract_id = tracing::field::Empty, link_name = tracing::field::Empty, target_key = tracing::field::Empty ))]
     async fn inner_rpc<Target>(
         &self,
         origin: WasmCloudEntity,
@@ -279,13 +279,25 @@ impl RpcClient {
         // Record all of the fields on the span. To avoid extra allocations, we are only going to
         // record here after we generate/derive the values
         let span = tracing::span::Span::current();
-        span.record("provider_id", &tracing::field::display(&issuer));
+        if let Some(hb) = get_host_bridge_safe() {
+            span.record("provider_id", &tracing::field::display(&hb.provider_key()));
+        }
         span.record("method", &tracing::field::display(&message.method));
         span.record("lattice_id", &tracing::field::display(&lattice));
-        span.record("target_id", &tracing::field::display(&target.public_key));
         span.record("subject", &tracing::field::display(&subject));
         span.record("issuer", &tracing::field::display(&issuer));
-
+        if !origin.public_key.is_empty() {
+            span.record("sender_key", &tracing::field::display(&origin.public_key));
+        }
+        if !target.contract_id.is_empty() {
+            span.record("contract_id", &tracing::field::display(&target.contract_id));
+        }
+        if !target.link_name.is_empty() {
+            span.record("link_name", &tracing::field::display(&target.link_name));
+        }
+        if !target.public_key.is_empty() {
+            span.record("target_key", &tracing::field::display(&target.public_key));
+        }
         //debug!("rpc_client sending");
         let claims = Claims::<jwt::Invocation>::new(
             issuer.clone(),

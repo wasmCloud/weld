@@ -19,6 +19,7 @@
 
 use std::{
     collections::HashMap,
+    marker::Unpin,
     sync::{Arc, RwLock},
 };
 
@@ -27,7 +28,9 @@ use async_nats::jetstream::{
     object_store::{Config, ObjectStore},
     Context,
 };
+use futures::TryFutureExt;
 use once_cell::sync::OnceCell;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{debug, error, instrument};
 
 use crate::error::{RpcError, RpcResult};
@@ -90,8 +93,6 @@ impl ChunkEndpoint {
     /// load the message after de-chunking
     #[instrument(level = "trace", skip(self))]
     pub async fn get_unchunkified(&self, inv_id: &str) -> RpcResult<Vec<u8>> {
-        use futures::TryFutureExt as _;
-        use tokio::io::AsyncReadExt as _;
         let mut result = Vec::new();
         let store = self.create_or_reuse_store().await?;
         debug!(invocation_id = %inv_id, "chunkify starting to receive");
@@ -128,7 +129,7 @@ impl ChunkEndpoint {
     pub async fn chunkify(
         &self,
         inv_id: &str,
-        mut bytes: (impl tokio::io::AsyncRead + std::marker::Unpin),
+        mut bytes: (impl AsyncRead + Unpin),
     ) -> RpcResult<()> {
         let store = self.create_or_reuse_store().await?;
         debug!(invocation_id = %inv_id, "chunkify starting to send");
@@ -145,7 +146,7 @@ impl ChunkEndpoint {
     pub async fn chunkify_response(
         &self,
         inv_id: &str,
-        bytes: &mut (impl tokio::io::AsyncRead + std::marker::Unpin),
+        bytes: &mut (impl AsyncRead + Unpin),
     ) -> Result<(), RpcError> {
         self.chunkify(&format!("{}-r", inv_id), bytes).await
     }

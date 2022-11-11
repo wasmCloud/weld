@@ -99,16 +99,7 @@ impl OtelHeaderInjector {
 
 impl Injector for OtelHeaderInjector {
     fn set(&mut self, key: &str, value: String) {
-        // NOTE: Because the underlying headers are an http header, we are going to escape any
-        // unicode values and non-printable ASCII chars, which sounds better than just silently
-        // ignoring or using an empty string. Unfortunately this adds an extra allocation that is
-        // probably ok for now as it is freed at the end, but I prefer telemetry stuff to be as
-        // little overhead as possible. If anyone has a better idea of how to handle this, please PR
-        // it in
-        // SAFETY: All chars escaped above
-        let key = key.escape_default().to_string();
-        let value = value.escape_default().to_string();
-        self.inner.insert(key.as_str(), value.as_str());
+        self.inner.insert(key, value.as_ref());
     }
 }
 
