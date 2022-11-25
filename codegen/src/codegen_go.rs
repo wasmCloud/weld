@@ -1660,7 +1660,7 @@ impl<'model> GoCodeGen<'model> {
                         }}
                        	{}
                         if err != nil {{ return make([]{},0),err }}
-                        val := make([]{}, size)
+                        val := make([]{}, 0, size)
                         for i := uint32(0); i < size; i++ {{
                            item,err := {}
                            if err != nil {{ return val, err }}
