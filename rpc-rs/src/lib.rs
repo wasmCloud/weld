@@ -11,6 +11,13 @@ pub use timestamp::Timestamp;
 #[cfg(not(target_arch = "wasm32"))]
 pub use wascap;
 
+// re-export async-nats. work-around for
+// https://github.com/rust-lang/rust/issues/44663 and https://rust-lang.github.io/rfcs/1977-public-private-dependencies.html
+// longer term: if public-private is not implemented,
+// split out rpc-client to separate lib, and make interfaces build locally (as wit-bindgen does)
+#[cfg(not(target_arch = "wasm32"))]
+pub use async_nats;
+
 #[cfg(all(not(target_arch = "wasm32"), feature = "otel"))]
 #[macro_use]
 pub mod otel;
