@@ -24,9 +24,9 @@ otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
 
 [dependencies]
 async-trait = "0.1"
-base64 = "0.13"
 bytes = "1.1.0"
 cfg-if = "1.0"
+data-encoding = "2.3"
 minicbor = { version = "0.17.1", features = ["std"] }
 rmp-serde = "1.1.0"
 serde_bytes = "0.11"
@@ -48,7 +48,6 @@ bigdecimal = { version = "0.3", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-nats = "0.23.0"
 atty = "0.2"
-data-encoding = "2.3"
 futures = "0.3"
 lazy_static = "1.4"
 nkeys = "0.2"

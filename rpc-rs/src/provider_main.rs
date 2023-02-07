@@ -242,7 +242,7 @@ pub fn _load_host_data() -> Result<HostData, RpcError> {
             "stdin is empty - expecting host data configuration".to_string(),
         ));
     }
-    let bytes = base64::decode(buffer.as_bytes()).map_err(|e| {
+    let bytes = data_encoding::BASE64.decode(buffer.as_bytes()).map_err(|e| {
         RpcError::Rpc(format!(
             "host data configuration passed through stdin has invalid encoding (expected base64): \
              {}",
