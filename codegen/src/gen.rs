@@ -177,10 +177,22 @@ impl<'model> Generator {
                 params.extend(file_params.into_iter());
                 params.insert(
                     "_file".to_string(),
-                    JsonValue::String(file_config.path.to_string_lossy().to_string()),
+                    JsonValue::String(file_config.path.clone()),
                 );
 
-                let out_path = output_dir.join(&file_config.path);
+                let out_path = if file_config.path.starts_with("OUT_DIR/") {
+                    if let Ok(out_dir) = std::env::var("OUT_DIR") {
+                        PathBuf::from(out_dir)
+                            .join(file_config.path.strip_prefix("OUT_DIR/").unwrap())
+                    } else {
+                        // should not occur with cargo builds
+                        return Err(crate::Error::Build(
+                            "cannot use OUT_DIR in file path because environment variable OUT_DIR is undefined.".into()
+                        ));
+                    }
+                } else {
+                    output_dir.join(&file_config.path)
+                };
                 let parent = out_path.parent().unwrap();
                 std::fs::create_dir_all(parent).map_err(|e| {
                     Error::Io(format!("creating directory {}: {}", parent.display(), e))

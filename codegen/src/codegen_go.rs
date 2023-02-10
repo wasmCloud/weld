@@ -295,7 +295,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
             None => {
                 return Err(Error::Other(format!(
                     "namespace must be defined (in codegen.toml) for go output file {}",
-                    file_config.path.display()
+                    &file_config.path
                 )));
             }
         };
