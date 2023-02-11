@@ -180,13 +180,12 @@ impl<'model> Generator {
                     JsonValue::String(file_config.path.clone()),
                 );
 
-                let out_path = if file_config.path.starts_with("OUT_DIR/") {
-                    if let Ok(out_dir) = std::env::var("OUT_DIR") {
-                        PathBuf::from(out_dir)
-                            .join(file_config.path.strip_prefix("OUT_DIR/").unwrap())
+                let out_path = if let Some(sub_path) = file_config.path.strip_prefix("OUT_DIR/") {
+                    if let Ok(env_out_dir) = std::env::var("OUT_DIR") {
+                        PathBuf::from(env_out_dir).join(sub_path)
                     } else {
-                        // should not occur with cargo builds
-                        return Err(crate::Error::Build(
+                        // Cargo always defines OUT_DIR so this shouldn't occur
+                        return  Err(crate::Error::Build(
                             "cannot use OUT_DIR in file path because environment variable OUT_DIR is undefined.".into()
                         ));
                     }
