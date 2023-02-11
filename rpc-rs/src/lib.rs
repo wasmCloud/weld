@@ -81,19 +81,19 @@ pub mod core {
                 }
 
                 /// Connect to nats using options provided by host
-                pub async fn nats_connect(&self) -> RpcResult<async_nats::Client> {
+                pub async fn nats_connect(&self) -> RpcResult<crate::async_nats::Client> {
                     use std::str::FromStr as _;
                     let nats_addr = if !self.lattice_rpc_url.is_empty() {
                         self.lattice_rpc_url.as_str()
                     } else {
                         crate::provider::DEFAULT_NATS_ADDR
                     };
-                    let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
+                    let nats_server = crate::async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
                         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
                     })?;
 
                     // Connect to nats
-                    let nc = async_nats::ConnectOptions::default()
+                    let nc = crate::async_nats::ConnectOptions::default()
                         .connect(nats_server)
                         .await
                         .map_err(|e| {

@@ -728,9 +728,9 @@ where
 }
 /// Encode DocumentRef as cbor
 #[doc(hidden)]
-pub fn encode_document_ref<'v, W: crate::cbor::Write>(
+pub fn encode_document_ref<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
-    val: &DocumentRef<'v>,
+    val: &DocumentRef<'_>,
 ) -> RpcResult<()>
 where
     <W as crate::cbor::Write>::Error: std::fmt::Display,
