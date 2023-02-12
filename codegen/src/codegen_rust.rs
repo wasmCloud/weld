@@ -1218,7 +1218,7 @@ impl<'model> RustCodeGen<'model> {
         writeln!(
             w,
             r#"/// client for sending {} messages
-              #[derive(Debug)]
+              #[derive(Clone, Debug)]
               pub struct {}Sender<T:Transport>  {{ transport: T }}
 
               impl<T:Transport> {}Sender<T> {{
