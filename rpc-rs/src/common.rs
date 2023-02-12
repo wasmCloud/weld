@@ -221,7 +221,7 @@ impl<T: Transport> AnySender<T> {
     }
 }
 
-impl<T: Transport + Sync + Send> AnySender<T> {
+impl<T: Transport> AnySender<T> {
     /// Send encoded payload
     #[inline]
     async fn send_raw<'s, 'ctx, 'msg>(
