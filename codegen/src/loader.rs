@@ -19,6 +19,9 @@ const CACHED_FILE_MAX_AGE: Duration = Duration::from_secs(60 * 60 * 24); // one 
 const SMITHY_CACHE_ENV_VAR: &str = "SMITHY_CACHE";
 const SMITHY_CACHE_NO_EXPIRE: &str = "NO_EXPIRE";
 
+/// Name of ENV var that can be used to override weld cache directory
+const WELD_CACHE_DIR_ENV_VAR: &str = "WELD_CACHE_DIR";
+
 /// Load all model sources and merge into single model.
 /// - Sources may be a combination of files, directories, and urls.
 /// - Model files may be .smithy or .json
@@ -147,6 +150,11 @@ fn url_to_cache_path(url: &str) -> Result<PathBuf> {
 /// Locate the weld cache directory
 #[doc(hidden)]
 pub fn weld_cache_dir() -> Result<PathBuf> {
+    // Use weld cache dir override if present (ex. in CI environments)
+    if let Some(cache_dir) = std::env::var(WELD_CACHE_DIR_ENV_VAR) {
+        return Ok(cache_dir);
+    }
+
     let dirs = directories::BaseDirs::new()
         .ok_or_else(|| Error::Other("invalid home directory".to_string()))?;
     let weld_cache = dirs.cache_dir().join("smithy");
