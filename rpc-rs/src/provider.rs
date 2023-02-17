@@ -199,6 +199,19 @@ impl HostBridge {
     pub fn lattice_prefix(&self) -> &str {
         &self.host_data.lattice_rpc_prefix
     }
+
+    /// Deserializes HostData config_json into T
+    /// (if you just need generic json, use Returns the config_json,
+    /// ```
+    /// // Example: deserialize to a hashmap
+    /// let config = host_bridge.config_json::<HashMap<String,String>>()?;
+    /// ```    
+    pub fn config_json<T: DeserializeOwned>(&self) -> Option<RpcResult<T>> {
+        self.host_data.config_json.as_ref().map(|json| {
+            serde_json::from_str::<T>(json.as_str())
+                .map_err(|e| RpcError::Deser(format!("deserializing config_json: {e}")))
+        })
+    }
 }
 
 impl Deref for HostBridge {
