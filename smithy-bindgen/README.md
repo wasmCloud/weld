@@ -1,8 +1,9 @@
 # smithy-bindgen
 
 This crate provides macros for generating rust bindings from smithy interfaces.
-This should eliminate the need for [`build.rs` and `codegen.toml` files](https://wasmcloud.dev/interfaces/codegen-toml/)
-
+For most uses of smithy interfaces used to generate rust sources,
+this can eliminate the need for [`build.rs` and `codegen.toml` files](https://wasmcloud.dev/interfaces/codegen-toml/).
+`codegen.toml` is still needed to generate bindings for other languages.
 
 > ### Feedback welcome!
 > This is a first pass at code generation macro, inspired by `wit-bindgen`. If you have used `codegen.toml`, please let us know if this works as a replacement. (one known omission: the `params` setting from codegen.toml is not yet available in this macro)
