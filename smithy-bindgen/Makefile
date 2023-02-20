@@ -1,4 +1,4 @@
-# weld/macros/Makefile
+# weld/smithy-bindgen/Makefile
 
 all: build
 

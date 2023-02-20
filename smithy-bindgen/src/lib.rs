@@ -29,7 +29,7 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 /// The macro takes one of three forms:
 ///
 /// ## Syntax
-/// 
+///
 /// The first parameter of the `smithy_bindgen!` macro can take one of three forms.
 /// The second parameter is the namespace used for code generation.
 ///
@@ -43,20 +43,20 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///   ````
 ///
 ///   The above is shorthand for the following:
-///   ``` 
+///   ```
 ///   # use smithy_bindgen::smithy_bindgen;
 ///   smithy_bindgen!({
-///     url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces", 
+///     url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces",
 ///     files: ["httpserver/httpserver.smithy"]
 ///   }, "org.wasmcloud.interfaces.httpserver" );
 ///   ```
 ///
-/// - one Model Source 
+/// - one Model Source
 ///
 ///   ```
 ///   # use smithy_bindgen::smithy_bindgen;
 ///   smithy_bindgen!({
-///     path: "./tests/test-bindgen.smithy", 
+///     path: "./tests/test-bindgen.smithy",
 ///   }, "org.example.interfaces.foo" );
 ///   ````
 ///
@@ -65,8 +65,8 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///   ```
 ///   # use smithy_bindgen::smithy_bindgen;
 ///   smithy_bindgen!([
-///     { path: "./tests/test-bindgen.smithy" }, 
-///     { url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/factorial/factorial.smithy" }, 
+///     { path: "./tests/test-bindgen.smithy" },
+///     { url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/factorial/factorial.smithy" },
 ///   ], "org.example.interfaces.foo" );
 ///   ```
 ///
@@ -85,17 +85,17 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///  ```
 ///
 ///  If a model source structure contains no url base and no path base,
-///  the url for the github wasmcloud interface repo is used: 
+///  the url for the github wasmcloud interface repo is used:
 ///  ```no_run
 ///  # /*
-///  url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces", 
+///  url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces",
 ///  # */
 ///  ```
 /// ## jsdelivr.net urls
-/// 
-/// `cdn.jsdelivr.net` mirrors open source github repositories. 
+///
+/// `cdn.jsdelivr.net` mirrors open source github repositories.
 /// The [url syntax](https://www.jsdelivr.com/?docs=gh) can optionally include
-/// a github branch, tag, or commit sha. 
+/// a github branch, tag, or commit sha.
 ///
 /// ## Common files
 ///
@@ -249,12 +249,13 @@ impl Parse for SmithySource {
                 Opt::Files(val) => source.files = val,
             }
         }
-        if !(!source.files.is_empty() ||
-            (source.url.is_some() && source.url.as_ref().unwrap().ends_with(".smithy")) ||
-            (source.path.is_some() && source.path.as_ref().unwrap().ends_with(".smithy")))
-         {
+        if !(!source.files.is_empty()
+            || (source.url.is_some() && source.url.as_ref().unwrap().ends_with(".smithy"))
+            || (source.path.is_some() && source.path.as_ref().unwrap().ends_with(".smithy")))
+        {
             return Err(Error::new(
-                call_site.span(), "There must be at least one .smithy file",
+                call_site.span(),
+                "There must be at least one .smithy file",
             ));
         }
         if source.url.is_none() && source.path.is_none() {
