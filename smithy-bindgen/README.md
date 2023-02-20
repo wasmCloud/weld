@@ -52,7 +52,7 @@ The second parameter is the namespace used for code generation.
 
 - one wasmcloud first-party interface
 
-  The single-file paramter is a path relative to the wasmcloud interfaces git repo `wasmcloud/interfaces`
+  The single-file parameter is a path relative to the wasmcloud interfaces git repo `wasmcloud/interfaces`
 
   ```
   smithy_bindgen!("httpserver/httpserver.smithy", "org.wasmcloud.interfaces.httpserver");

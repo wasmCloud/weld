@@ -1,19 +1,14 @@
-#![allow(unused_imports)]
-
-//use proc_macro::TokenStream;
+///! smithy-bindgen macros
+///!
 use proc_macro2::Span;
-use proc_macro_error::{abort, proc_macro_error};
-use quote::{format_ident, quote, ToTokens};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
 use syn::{
-    braced, bracketed, parse::Parse, parse::ParseStream, parse::Result, parse_macro_input,
-    punctuated::Punctuated, spanned::Spanned, token, Attribute, Error, Fields, Ident, LitStr, Meta,
-    NestedMeta, Token,
+    bracketed, parse::Parse, parse::ParseStream, parse::Result, punctuated::Punctuated,
+    spanned::Spanned, token, Error, LitStr, Token,
 };
-use tracing::error;
 use weld_codegen::{
-    config::{ModelSource, ModelSourceKind, OutputFile},
+    config::{ModelSource, OutputFile},
     generators::{CodeGen, RustCodeGen},
     render::Renderer,
     sources_to_model,
@@ -24,9 +19,7 @@ const BASE_MODEL_URL: &str = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces";
 const CORE_MODEL: &str = "core/wasmcloud-core.smithy";
 const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 
-#[allow(rustdoc::bare_urls)]
 /// Generate code from a smithy IDL file.
-/// The macro takes one of three forms:
 ///
 /// ## Syntax
 ///
@@ -35,7 +28,7 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///
 /// - one wasmcloud first-party interface  
 ///
-///   The single-file paramter is a path relative to the wasmcloud interfaces git repo `wasmcloud/interfaces`
+///   The single-file parameter is a path relative to the wasmcloud interfaces git repo `wasmcloud/interfaces`
 ///
 ///   ```
 ///   # use smithy_bindgen::smithy_bindgen;
