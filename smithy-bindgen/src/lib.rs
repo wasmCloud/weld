@@ -63,27 +63,30 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///   ], "org.example.interfaces.foo" );
 ///   ```
 ///
-/// ## Model Source
+/// ## Model Source Specification
 ///
-///  A model source contains a url or path, and an optional list of files.
-///  The `files` field may be omitted if the `url` or `path` contains the full path to the `.smithy` file.
-///  All the following are (syntactically) valid model sources:
-///  ```no_run
-///  # /*
-///  { url: "https://example.com/interfaces/foo.smithy" }
-///  { url: "https://example.com/interfaces", files: [ "foo.smithy", "bar.smithy" ]}
-///  { path: "../interfaces/foo.smithy" }
-///  { path: "../interfaces", files: ["foo.smithy", "bar.smithy"]}
-///  # */
-///  ```
+/// A model source contains a `url`, for http(s) downloads, or a `path`, for local fs access, that serves as a base, plus `files`, an optional list of file paths that are appended to the base to build complete url download paths and local file paths.
+/// When joining the sub-paths from the `files` array, '/' is inserted or removed as needed, so that there is exactly one between the base and the sub-path.
+/// `url` must begin with either 'http://' or 'https://'. If `path` is a relative fs path, it is relative to the folder containing `Cargo.toml`.
+/// `files` may be omitted if the `url` or `path` contains the full path to the `.smithy` file.
 ///
-///  If a model source structure contains no url base and no path base,
-///  the url for the github wasmcloud interface repo is used:
-///  ```no_run
-///  # /*
-///  url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces",
-///  # */
-///  ```
+/// All the following are (syntactically) valid model sources:
+/// ```
+/// { url: "https://example.com/interfaces/foo.smithy" }
+/// { url: "https://example.com/interfaces", files: [ "foo.smithy", "bar.smithy" ]}
+/// { path: "../interfaces/foo.smithy" }
+/// { path: "../interfaces", files: ["foo.smithy", "bar.smithy"]}
+/// ```
+///
+/// If a model source structure contains no url base and no path base,
+/// the url for the github wasmcloud interface repo is used:
+/// ```
+/// url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces"
+/// ```
+///
+/// Why would the code generator need to load more than one smithy file? So that interfaces can share common symbols for data structures. Most smithy interfaces already import symbols from the namespace `org.wasmcloud.model`, defined in `wasmcloud-model.smithy`.
+/// The bindgen tool resolves all symbols by assembling an in-memory schema model from all the smithy sources and namespaces, then traversing through the in-memory model, generating code only for the schema elements in the namespace declared in the second parameter of `smithy_bindgen!`.
+///
 /// ## jsdelivr.net urls
 ///
 /// `cdn.jsdelivr.net` mirrors open source github repositories.
