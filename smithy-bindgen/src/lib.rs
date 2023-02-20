@@ -7,7 +7,7 @@ use quote::{format_ident, quote, ToTokens};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
 use syn::{
-    braced, parse::Parse, parse::ParseStream, parse::Result, parse_macro_input,
+    braced, bracketed, parse::Parse, parse::ParseStream, parse::Result, parse_macro_input,
     punctuated::Punctuated, spanned::Spanned, token, Attribute, Error, Fields, Ident, LitStr, Meta,
     NestedMeta, Token,
 };
@@ -38,11 +38,13 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///   The single-file paramter is a path relative to the wasmcloud interfaces git repo `wasmcloud/interfaces`
 ///
 ///   ```
+///   # use smithy_bindgen::smithy_bindgen;
 ///   smithy_bindgen!("httpserver/httpserver.smithy", "org.wasmcloud.interfaces.httpserver");
 ///   ````
 ///
 ///   The above is shorthand for the following:
 ///   ``` 
+///   # use smithy_bindgen::smithy_bindgen;
 ///   smithy_bindgen!({
 ///     url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces", 
 ///     files: ["httpserver/httpserver.smithy"]
@@ -52,17 +54,19 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 /// - one Model Source 
 ///
 ///   ```
-///   smithy-bindgen!({
-///     path: "../interfaces/foo.smithy", 
+///   # use smithy_bindgen::smithy_bindgen;
+///   smithy_bindgen!({
+///     path: "./tests/test-bindgen.smithy", 
 ///   }, "org.example.interfaces.foo" );
 ///   ````
 ///
 /// - array of Model Sources
 ///
 ///   ```
-///   smithy-bindgen!([
-///     { path: "../interfaces/foo.smithy" }, 
-///     { url: "keyvalue/keyvalue.smithy" },
+///   # use smithy_bindgen::smithy_bindgen;
+///   smithy_bindgen!([
+///     { path: "./tests/test-bindgen.smithy" }, 
+///     { url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/factorial/factorial.smithy" }, 
 ///   ], "org.example.interfaces.foo" );
 ///   ```
 ///
@@ -71,17 +75,21 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///  A model source contains a url or path, and an optional list of files.
 ///  The `files` field may be omitted if the `url` or `path` contains the full path to the `.smithy` file.
 ///  All the following are (syntactically) valid model sources:
-///  ```
+///  ```no_run
+///  # /*
 ///  { url: "https://example.com/interfaces/foo.smithy" }
 ///  { url: "https://example.com/interfaces", files: [ "foo.smithy", "bar.smithy" ]}
 ///  { path: "../interfaces/foo.smithy" }
 ///  { path: "../interfaces", files: ["foo.smithy", "bar.smithy"]}
+///  # */
 ///  ```
 ///
 ///  If a model source structure contains no url base and no path base,
 ///  the url for the github wasmcloud interface repo is used: 
-///  ```
+///  ```no_run
+///  # /*
 ///  url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces", 
+///  # */
 ///  ```
 /// ## jsdelivr.net urls
 /// 
@@ -199,7 +207,7 @@ impl Parse for Opt {
             input.parse::<kw::files>()?;
             input.parse::<Token![:]>()?;
             let content;
-            let _lbrace = braced!(content in input);
+            let _array = bracketed!(content in input);
             let files = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?
                 .into_iter()
                 .map(|val| val.value())
@@ -241,10 +249,12 @@ impl Parse for SmithySource {
                 Opt::Files(val) => source.files = val,
             }
         }
-        if source.files.is_empty() {
+        if !(!source.files.is_empty() ||
+            (source.url.is_some() && source.url.as_ref().unwrap().ends_with(".smithy")) ||
+            (source.path.is_some() && source.path.as_ref().unwrap().ends_with(".smithy")))
+         {
             return Err(Error::new(
-                call_site.span(),
-                "There must be at least one file specified in 'files'",
+                call_site.span(), "There must be at least one .smithy file",
             ));
         }
         if source.url.is_none() && source.path.is_none() {
