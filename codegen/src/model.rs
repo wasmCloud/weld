@@ -370,7 +370,7 @@ pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
     }
 }
 
-pub(crate) struct NumberedMember {
+pub struct NumberedMember {
     field_num: Option<u16>,
     shape: MemberShape,
 }
