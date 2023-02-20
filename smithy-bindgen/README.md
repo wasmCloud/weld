@@ -98,6 +98,13 @@ All the following are (syntactically) valid model sources:
 { path: "../interfaces", files: ["foo.smithy", "bar.smithy"]}
 ```
 
+These are all equivalent:
+```
+{ path: "/usr/share/interfaces/timer.smithy" }
+{ path: "/usr/share/interfaces", files: [ "timer.smithy" ] }
+{ path: "/usr/share/interfaces/", files: [ "timer.smithy" ] }
+```
+
 If a model source structure contains no url base and no path base,
 the url for the github wasmcloud interface repo is used:
 ```
