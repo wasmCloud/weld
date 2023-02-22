@@ -198,22 +198,24 @@ impl HostBridge {
         &self.host_data.lattice_rpc_prefix
     }
 
-    /// Deserializes HostData config_json into T
-    /// (if you just need generic json, use Returns the config_json,
+    /// Returns the configuration values as a json string.
+    /// Caller may need to deserialize
     /// ```no_run
     /// # #[tokio::main]
     /// # async fn main() {
     /// # use std::collections::HashMap;
     /// # let host_bridge = wasmbus_rpc::provider::HostBridge::new_client(async_nats::connect("demo.nats.io").await.unwrap(), &wasmbus_rpc::core::HostData::default()).unwrap();
     /// // Example: deserialize to a hashmap
-    /// let config = host_bridge.config_json::<HashMap<String,String>>().unwrap();
+    /// let settings: HashMap<String,String>  = if let Some(json) = host_bridge.config_json() {
+    ///    serde_json::from_str(&json).unwrap() // handle error
+    /// } else {
+    ///    Default::default()
+    /// };
+    /// println!("config: {:?}", &settings);
     /// # }
     /// ```    
-    pub fn config_json<T: DeserializeOwned>(&self) -> Option<RpcResult<T>> {
-        self.host_data.config_json.as_ref().map(|json| {
-            serde_json::from_str::<T>(json.as_str())
-                .map_err(|e| RpcError::Deser(format!("deserializing config_json: {e}")))
-        })
+    pub fn config_json(&self) -> Option<String> {
+        self.host_data.config_json.clone()
     }
 }
 
