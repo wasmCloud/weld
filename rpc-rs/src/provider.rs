@@ -199,14 +199,16 @@ impl HostBridge {
     }
 
     /// Returns the configuration values as a json string.
-    /// Caller may need to deserialize
+    /// Caller may need to deserialize, and may want to cache the results
+    /// if the data is large or this method is called frequently.
+    /// If there is no configuration defined, returns None.
     /// ```no_run
     /// # #[tokio::main]
     /// # async fn main() {
     /// # use std::collections::HashMap;
     /// # let host_bridge = wasmbus_rpc::provider::HostBridge::new_client(async_nats::connect("demo.nats.io").await.unwrap(), &wasmbus_rpc::core::HostData::default()).unwrap();
     /// // Example: deserialize to a hashmap
-    /// let settings: HashMap<String,String>  = if let Some(json) = host_bridge.config_json() {
+    /// let settings: HashMap<String,String>  = if let Some(json) = host_bridge.config_json_raw() {
     ///    serde_json::from_str(&json).unwrap() // handle error
     /// } else {
     ///    Default::default()
@@ -214,8 +216,8 @@ impl HostBridge {
     /// println!("config: {:?}", &settings);
     /// # }
     /// ```    
-    pub fn config_json(&self) -> Option<String> {
-        self.host_data.config_json.clone()
+    pub fn config_json_raw(&self) -> Option<&str> {
+        self.host_data.config_json.as_deref()
     }
 }
 
