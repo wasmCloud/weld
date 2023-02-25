@@ -132,8 +132,3 @@ Models may include symbols defined in other models via the `use` command.
 Only the symbols defined in the namespace (`smithy_bindgen!`'s second parameter)
 will be included in the generated code.
 
-
-
-
-
-
