@@ -46,6 +46,10 @@ impl CodeGen for DocGen {
         output_dir: Option<&Path>,
         renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
+        let output_dir = match output_dir {
+            None => return Ok(()),
+            Some(d) => d,
+        };
         let model = match model {
             None => return Ok(()),
             Some(model) => model,
@@ -77,21 +81,15 @@ impl CodeGen for DocGen {
             .collect::<BTreeSet<String>>();
 
         for ns in namespaces.iter() {
-            let mut out = if let Some(output_dir) = output_dir {
-                let output_file =
-                    output_dir.join(format!("{}.html", crate::strings::to_snake_case(ns)));
-
-                std::fs::File::create(&output_file).map_err(|e| {
-                    Error::Io(format!(
-                        "writing output file {}: {}",
-                        output_file.display(),
-                        e
-                    ))
-                })?
-            } else {
-                // if writer
-                todo!();
-            };
+            let output_file =
+                output_dir.join(format!("{}.html", crate::strings::to_snake_case(ns)));
+            let mut out = std::fs::File::create(&output_file).map_err(|e| {
+                Error::Io(format!(
+                    "writing output file {}: {}",
+                    output_file.display(),
+                    e
+                ))
+            })?;
             params.insert("namespace".to_string(), JsonValue::String(ns.clone()));
             params.insert("title".to_string(), JsonValue::String(ns.clone()));
             renderer.render(&doc_template, &params, &mut out)?;
