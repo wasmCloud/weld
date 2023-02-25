@@ -8,7 +8,7 @@ use std::{
     convert::Infallible,
     fmt::Formatter,
     ops::Deref,
-    sync::{Arc, Mutex as StdMutex},
+    sync::{atomic::AtomicU64, atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -728,7 +728,17 @@ impl HostBridge {
 pub struct ProviderTransport<'send> {
     pub bridge: &'send HostBridge,
     pub ld: &'send LinkDefinition,
-    timeout: StdMutex<Duration>,
+    timeout_ms: AtomicU64,
+}
+
+impl<'send> Clone for ProviderTransport<'send> {
+    fn clone(&self) -> Self {
+        ProviderTransport {
+            bridge: self.bridge,
+            ld: self.ld,
+            timeout_ms: AtomicU64::new(self.timeout_ms.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl<'send> ProviderTransport<'send> {
@@ -748,14 +758,18 @@ impl<'send> ProviderTransport<'send> {
     ) -> Self {
         #[allow(clippy::redundant_closure)]
         let bridge = bridge.unwrap_or_else(|| crate::provider_main::get_host_bridge());
-        let timeout = StdMutex::new(timeout.unwrap_or_else(|| {
-            bridge
+        let timeout = match timeout {
+            Some(d) => d.as_millis() as u64,
+            None => bridge
                 .host_data
                 .default_rpc_timeout_ms
-                .map(Duration::from_millis)
-                .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
-        }));
-        Self { bridge, ld, timeout }
+                .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS.as_millis() as u64),
+        };
+        Self {
+            bridge,
+            ld,
+            timeout_ms: AtomicU64::new(timeout),
+        }
     }
 }
 
@@ -769,19 +783,7 @@ impl<'send> Transport for ProviderTransport<'send> {
     ) -> RpcResult<Vec<u8>> {
         let origin = self.ld.provider_entity();
         let target = self.ld.actor_entity();
-        let timeout = {
-            if let Ok(rd) = self.timeout.lock() {
-                *rd
-            } else {
-                // if lock is poisioned
-                warn!("rpc timeout mutex error - using default value");
-                self.bridge
-                    .host_data
-                    .default_rpc_timeout_ms
-                    .map(Duration::from_millis)
-                    .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
-            }
-        };
+        let timeout = Duration::from_millis(self.timeout_ms.load(Ordering::Relaxed));
         let lattice = &self.bridge.lattice_prefix;
         self.bridge
             .rpc_client()
@@ -790,10 +792,6 @@ impl<'send> Transport for ProviderTransport<'send> {
     }
 
     fn set_timeout(&self, interval: Duration) {
-        if let Ok(mut write) = self.timeout.lock() {
-            *write = interval;
-        } else {
-            warn!("rpc timeout mutex error - unchanged")
-        }
+        self.timeout_ms.store(interval.as_millis() as u64, Ordering::Relaxed);
     }
 }

@@ -159,7 +159,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         &mut self,
         model: Option<&Model>,
         _lc: &LanguageConfig,
-        _output_dir: &Path,
+        _output_dir: Option<&Path>,
         _renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
         self.namespace = None;
