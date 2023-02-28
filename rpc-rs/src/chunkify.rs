@@ -23,7 +23,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use async_nats::jetstream::{
+use crate::async_nats::jetstream::{
     self,
     object_store::{Config, ObjectStore},
     Context,
@@ -73,7 +73,7 @@ impl ChunkEndpoint {
 
     pub(crate) fn with_client(
         lattice: String,
-        nc: async_nats::Client,
+        nc: crate::async_nats::Client,
         domain: Option<String>,
     ) -> Self {
         let map = jetstream_map();
@@ -98,15 +98,13 @@ impl ChunkEndpoint {
         debug!(invocation_id = %inv_id, "chunkify starting to receive");
         let mut obj = store.get(inv_id).await.map_err(|e| {
             RpcError::Nats(format!(
-                "error starting to receive chunked stream for inv {}:{}",
-                inv_id, e
+                "error starting to receive chunked stream for inv {inv_id}:{e}"
             ))
         })?;
         let r = obj.read_to_end(&mut result);
         r.map_err(|e| {
             RpcError::Nats(format!(
-                "error receiving chunked stream for inv {}:{}",
-                inv_id, e
+                "error receiving chunked stream for inv {inv_id}:{e}"
             ))
         })
         .await?;
@@ -121,7 +119,7 @@ impl ChunkEndpoint {
     /// load response after de-chunking
     pub async fn get_unchunkified_response(&self, inv_id: &str) -> RpcResult<Vec<u8>> {
         // responses are stored in the object store with '-r' suffix on the object name
-        self.get_unchunkified(&format!("{}-r", inv_id)).await
+        self.get_unchunkified(&format!("{inv_id}-r")).await
     }
 
     /// chunkify a message
@@ -136,7 +134,7 @@ impl ChunkEndpoint {
         let info = store
             .put(inv_id, &mut bytes)
             .await
-            .map_err(|e| RpcError::Nats(format!("writing chunkified for {}: {}", inv_id, e)))?;
+            .map_err(|e| RpcError::Nats(format!("writing chunkified for {inv_id}: {e}")))?;
         debug!(?info, invocation_id = %inv_id, "chunkify completed writing");
 
         Ok(())
@@ -148,7 +146,7 @@ impl ChunkEndpoint {
         inv_id: &str,
         bytes: &mut (impl AsyncRead + Unpin),
     ) -> Result<(), RpcError> {
-        self.chunkify(&format!("{}-r", inv_id), bytes).await
+        self.chunkify(&format!("{inv_id}-r"), bytes).await
     }
 
     async fn create_or_reuse_store(&self) -> RpcResult<ObjectStore> {

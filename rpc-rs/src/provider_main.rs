@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use crate::async_nats::{AuthError, ConnectOptions};
 use std::io::{BufRead, StderrLock, Write};
 use std::str::FromStr;
 
@@ -148,7 +149,7 @@ where
         crate::provider::DEFAULT_NATS_ADDR
     };
     let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
-        RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
+        RpcError::InvalidParameter(format!("Invalid nats server url '{nats_addr}': {e}"))
     })?;
 
     let nc = crate::rpc_client::with_connection_event_logging(
@@ -156,13 +157,13 @@ where
             host_data.lattice_rpc_user_jwt.trim(),
             host_data.lattice_rpc_user_seed.trim(),
         ) {
-            ("", "") => async_nats::ConnectOptions::default(),
+            ("", "") => ConnectOptions::default(),
             (rpc_jwt, rpc_seed) => {
                 let key_pair = std::sync::Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
                 let jwt = rpc_jwt.to_owned();
-                async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                ConnectOptions::with_jwt(jwt, move |nonce| {
                     let key_pair = key_pair.clone();
-                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                    async move { key_pair.sign(&nonce).map_err(AuthError::new) }
                 })
             }
         },
@@ -230,8 +231,7 @@ pub fn _load_host_data() -> Result<HostData, RpcError> {
         let mut handle = stdin.lock();
         handle.read_line(&mut buffer).map_err(|e| {
             RpcError::Rpc(format!(
-                "failed to read host data configuration from stdin: {}",
-                e
+                "failed to read host data configuration from stdin: {e}"
             ))
         })?;
     }
@@ -245,8 +245,7 @@ pub fn _load_host_data() -> Result<HostData, RpcError> {
     let bytes = base64::decode(buffer.as_bytes()).map_err(|e| {
         RpcError::Rpc(format!(
             "host data configuration passed through stdin has invalid encoding (expected base64): \
-             {}",
-            e
+             {e}"
         ))
     })?;
     let host_data: HostData = serde_json::from_slice(&bytes).map_err(|e| {
@@ -296,7 +295,7 @@ fn configure_tracing(_: String, structured_logging_enabled: bool) {
     let layer = get_log_layer(structured_logging_enabled);
     let subscriber = tracing_subscriber::Registry::default().with(filter).with(layer);
     if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
-        eprintln!("Logger was already created by provider, continuing: {}", e);
+        eprintln!("Logger was already created by provider, continuing: {e}");
     }
 }
 
@@ -374,7 +373,7 @@ fn get_log_layer(structured_logging_enabled: bool) -> impl Layer<Layered<EnvFilt
 
 fn get_env_filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|e| {
-        eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
+        eprintln!("RUST_LOG was not set or the given directive was invalid: {e:?}\nDefaulting logger to `info` level");
         EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
     })
 }

@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use async_nats::HeaderMap;
+use crate::async_nats::{Client, ConnectOptions, HeaderMap};
 use futures::Future;
 #[cfg(feature = "prometheus")]
 use prometheus::{IntCounter, Opts};
@@ -47,7 +47,7 @@ pub(crate) const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);
 ///
 #[derive(Clone)]
 pub struct RpcClient {
-    client: async_nats::Client,
+    client: Client,
     key: Arc<wascap::prelude::KeyPair>,
     /// host id (public key) for invocations
     host_id: String,
@@ -119,7 +119,7 @@ impl RpcClient {
     /// parameters: async nats client, rpc timeout
     /// secret key for signing messages, host_id, and optional timeout.
     pub fn new(
-        nats: async_nats::Client,
+        nats: Client,
         host_id: String,
         timeout: Option<Duration>,
         key_pair: Arc<wascap::prelude::KeyPair>,
@@ -131,7 +131,7 @@ impl RpcClient {
     /// parameters: nats client, lattice rpc prefix (usually "default"),
     /// secret key for signing messages, host_id, and optional timeout.
     pub(crate) fn new_client(
-        nats: async_nats::Client,
+        nats: Client,
         host_id: String,
         timeout: Option<Duration>,
         key_pair: Arc<wascap::prelude::KeyPair>,
@@ -147,7 +147,7 @@ impl RpcClient {
     }
 
     /// convenience method for returning async client
-    pub fn client(&self) -> async_nats::Client {
+    pub fn client(&self) -> Client {
         self.client.clone()
     }
 
@@ -425,7 +425,7 @@ impl RpcClient {
         } else {
             self.publish(topic, nats_body)
                 .await
-                .map_err(|e| RpcError::Nats(format!("publish error: {}: {}", target_url, e)))?;
+                .map_err(|e| RpcError::Nats(format!("publish error: {target_url}: {e}")))?;
             Ok(Vec::new())
         }
     }
@@ -527,7 +527,7 @@ impl RpcClient {
             Ok(t) => Ok(self.publish(reply_to, t).await?),
             Err(e) => {
                 // extremely unlikely that InvocationResponse would fail to serialize
-                Err(RpcError::Ser(format!("InvocationResponse: {}", e)))
+                Err(RpcError::Ser(format!("InvocationResponse: {e}")))
             }
         }
     }
@@ -552,7 +552,7 @@ impl RpcClient {
         inv: Invocation,
     ) -> Result<(Invocation, Claims<jwt::Invocation>), String> {
         let vr = jwt::validate_token::<jwt::Invocation>(&inv.encoded_claims)
-            .map_err(|e| format!("{}", e))?;
+            .map_err(|e| format!("{e}"))?;
         if vr.expired {
             return Err("Invocation claims token expired".into());
         }
@@ -565,7 +565,7 @@ impl RpcClient {
         let target_url = format!("{}/{}", inv.target.url(), &inv.operation);
         let hash = invocation_hash(&target_url, &inv.origin.url(), &inv.operation, &inv.msg);
         let claims =
-            Claims::<jwt::Invocation>::decode(&inv.encoded_claims).map_err(|e| format!("{}", e))?;
+            Claims::<jwt::Invocation>::decode(&inv.encoded_claims).map_err(|e| format!("{e}"))?;
         let inv_claims = claims
             .metadata
             .as_ref()
@@ -617,10 +617,8 @@ impl RpcClient {
 }
 
 /// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), slow consumer, and lame duck(warn) events.
-pub fn with_connection_event_logging(
-    opts: async_nats::ConnectOptions,
-) -> async_nats::ConnectOptions {
-    use async_nats::Event;
+pub fn with_connection_event_logging(opts: ConnectOptions) -> ConnectOptions {
+    use crate::async_nats::Event;
     opts.event_callback(|event| async move {
         match event {
             Event::Disconnected => warn!("nats client disconnected"),
@@ -701,7 +699,7 @@ where
 {
     crate::common::serialize(
         &serde_json::from_value::<T>(v)
-            .map_err(|e| RpcError::Deser(format!("invalid params: {}.", e)))?,
+            .map_err(|e| RpcError::Deser(format!("invalid params: {e}.")))?,
     )
 }
 
@@ -712,7 +710,7 @@ where
     T: DeserializeOwned,
 {
     serde_json::to_value(crate::common::deserialize::<T>(msg)?)
-        .map_err(|e| RpcError::Ser(format!("response serialization : {}.", e)))
+        .map_err(|e| RpcError::Ser(format!("response serialization : {e}.")))
 }
 
 #[cfg(feature = "prometheus")]

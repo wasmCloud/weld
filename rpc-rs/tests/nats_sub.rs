@@ -7,6 +7,7 @@ use test_log::test;
 use tracing::{debug, error, info};
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{
+    async_nats::{ConnectOptions, ServerAddr},
     error::{RpcError, RpcResult},
     rpc_client::{with_connection_event_logging, RpcClient},
 };
@@ -28,12 +29,12 @@ fn is_demo() -> bool {
 /// Parameter is optional RPC timeout
 async fn make_client(timeout: Option<Duration>) -> RpcResult<RpcClient> {
     let nats_url = nats_url();
-    let server_addr = async_nats::ServerAddr::from_str(&nats_url).unwrap();
-    let nc = with_connection_event_logging(async_nats::ConnectOptions::default())
+    let server_addr = ServerAddr::from_str(&nats_url).unwrap();
+    let nc = with_connection_event_logging(ConnectOptions::default())
         .connect(server_addr)
         .await
         .map_err(|e| {
-            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_url, e))
+            RpcError::ProviderInit(format!("nats connection to {nats_url} failed: {e}"))
         })?;
 
     let key_pair = KeyPair::new_user();
@@ -81,7 +82,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
         let mut count: u64 = 0;
         while let Some(msg) = sub.next().await {
             let size = msg.payload.len();
-            let response = format!("{}", size);
+            let response = format!("{size}");
             if let Some(reply_to) = msg.reply {
                 if let Err(e) = nc.publish(reply_to, response.as_bytes().to_vec().into()).await {
                     error!("error publishing subscriber response: {}", e);

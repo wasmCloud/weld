@@ -151,15 +151,16 @@ pub struct HostBridge {
 }
 
 impl HostBridge {
-    pub(crate) fn new_client(
-        nats: async_nats::Client,
+    #[doc(hidden)]
+    pub fn new_client(
+        nats: crate::async_nats::Client,
         host_data: &HostData,
     ) -> RpcResult<HostBridge> {
         let key = Arc::new(if host_data.is_test() {
             KeyPair::new_user()
         } else {
             KeyPair::from_seed(&host_data.invocation_seed)
-                .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
+                .map_err(|e| RpcError::NotInitialized(format!("key failure: {e}")))?
         });
 
         let rpc_client = RpcClient::new_client(
@@ -199,6 +200,28 @@ impl HostBridge {
     pub fn lattice_prefix(&self) -> &str {
         &self.host_data.lattice_rpc_prefix
     }
+
+    /// Returns the configuration values as a json string.
+    /// Caller may need to deserialize, and may want to cache the results
+    /// if the data is large or this method is called frequently.
+    /// If there is no configuration defined, returns None.
+    /// ```no_run
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # use std::collections::HashMap;
+    /// # let host_bridge = wasmbus_rpc::provider::HostBridge::new_client(async_nats::connect("demo.nats.io").await.unwrap(), &wasmbus_rpc::core::HostData::default()).unwrap();
+    /// // Example: deserialize to a hashmap
+    /// let settings: HashMap<String,String>  = if let Some(json) = host_bridge.config_json_raw() {
+    ///    serde_json::from_str(&json).unwrap() // handle error
+    /// } else {
+    ///    Default::default()
+    /// };
+    /// println!("config: {:?}", &settings);
+    /// # }
+    /// ```    
+    pub fn config_json_raw(&self) -> Option<&str> {
+        self.host_data.config_json.as_deref()
+    }
 }
 
 impl Deref for HostBridge {
@@ -213,7 +236,10 @@ impl Deref for HostBridge {
 /// Initialize host bridge for use by wasmbus-test-util.
 /// The purpose is so that test code can get the nats configuration
 /// This is never called inside a provider process (and will fail if a provider calls it)
-pub fn init_host_bridge_for_test(nc: async_nats::Client, host_data: &HostData) -> RpcResult<()> {
+pub fn init_host_bridge_for_test(
+    nc: crate::async_nats::Client,
+    host_data: &HostData,
+) -> RpcResult<()> {
     let hb = HostBridge::new_client(nc, host_data)?;
     crate::provider_main::set_host_bridge(hb)
         .map_err(|_| RpcError::Other("HostBridge already initialized".to_string()))?;
@@ -249,7 +275,11 @@ impl HostBridge {
     // parse incoming subscription message
     // if it fails deserialization, we can't really respond;
     // so log the error
-    fn parse_msg<T: DeserializeOwned>(&self, msg: &async_nats::Message, topic: &str) -> Option<T> {
+    fn parse_msg<T: DeserializeOwned>(
+        &self,
+        msg: &crate::async_nats::Message,
+        topic: &str,
+    ) -> Option<T> {
         match if self.host_data.is_test() {
             serde_json::from_slice(&msg.payload).map_err(|e| RpcError::Deser(e.to_string()))
         } else {
@@ -430,7 +460,7 @@ impl HostBridge {
                                     if let Some(reply) = msg.reply {
                                         if let Err(e) = this.rpc_client().publish_invocation_response(reply,
                                             InvocationResponse{
-                                                error: Some(format!("deser error: {}", error)),
+                                                error: Some(format!("deser error: {error}")),
                                                 ..Default::default()
                                             },
                                             &lattice
@@ -506,7 +536,7 @@ impl HostBridge {
             // When the above issue is fixed, verify the source and keep looping if it's invalid.
 
             // Check if we really need to shut down
-            if let Some(async_nats::Message { reply: Some(reply_to), payload, .. }) = msg {
+            if let Some(crate::async_nats::Message { reply: Some(reply_to), payload, .. }) = msg {
                 let shutmsg: ShutdownMessage = serde_json::from_slice(&payload).unwrap_or_default();
                 // Backwards compatibility - if no host (or payload) is supplied, default
                 // to shutting down unconditionally
@@ -563,7 +593,7 @@ impl HostBridge {
     }
 
     #[instrument(level = "debug", skip_all, fields(actor_id = tracing::field::Empty, provider_id = tracing::field::Empty, contract_id = tracing::field::Empty, link_name = tracing::field::Empty))]
-    async fn handle_link_put<P>(&self, msg: async_nats::Message, provider: &P)
+    async fn handle_link_put<P>(&self, msg: crate::async_nats::Message, provider: &P)
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
