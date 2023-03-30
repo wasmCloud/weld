@@ -2,11 +2,14 @@
 //! wasmbus-rpc calls. Please note that right now this is only supported for providers. This module
 //! is only available with the `otel` feature enabled
 
-use crate::async_nats::header::HeaderMap;
+use crate::async_nats::{header::HeaderMap, Message as NatsMessage};
+
+use async_nats::header::IntoHeaderName;
 use opentelemetry::{
     propagation::{Extractor, Injector, TextMapPropagator},
     sdk::propagation::TraceContextPropagator,
 };
+use std::collections::HashMap;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -17,25 +20,19 @@ lazy_static::lazy_static! {
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Extractor`] trait
 #[derive(Debug)]
 pub struct OtelHeaderExtractor<'a> {
-    inner: &'a HeaderMap,
+    inner: &'a HashMap<&'a str, &'a str>,
 }
 
 impl<'a> OtelHeaderExtractor<'a> {
     /// Creates a new extractor using the given [`HeaderMap`]
-    pub fn new(headers: &'a HeaderMap) -> Self {
-        OtelHeaderExtractor { inner: headers }
-    }
-
-    /// Creates a new extractor using the given message
-    pub fn new_from_message(msg: &'a crate::async_nats::Message) -> Self {
-        let inner = msg.headers.as_ref().unwrap_or(&EMPTY_HEADERS);
+    pub fn new(inner: &'a HashMap<&str, &str>) -> Self {
         OtelHeaderExtractor { inner }
     }
 }
 
 impl<'a> Extractor for OtelHeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
-        self.inner.get(key).and_then(|s| s.iter().next().map(|s| s.as_str()))
+        self.inner.get(key).copied()
     }
 
     fn keys(&self) -> Vec<&str> {
@@ -47,8 +44,8 @@ impl<'a> Extractor for OtelHeaderExtractor<'a> {
     }
 }
 
-impl<'a> AsRef<HeaderMap> for OtelHeaderExtractor<'a> {
-    fn as_ref(&self) -> &'a HeaderMap {
+impl<'a> AsRef<HashMap<&'a str, &'a str>> for OtelHeaderExtractor<'a> {
+    fn as_ref(&self) -> &'a HashMap<&'a str, &'a str> {
         self.inner
     }
 }
@@ -112,12 +109,34 @@ impl From<OtelHeaderInjector> for HeaderMap {
     }
 }
 
+/// Structs that have a header map that can be used for span context
+pub trait HasHeaderMap {
+    /// Extract the header map
+    fn header_map(&self) -> HashMap<&str, &str>;
+}
+
+impl HasHeaderMap for &NatsMessage {
+    fn header_map(&self) -> HashMap<&str, &str> {
+        let mut map = HashMap::new();
+        if let Some(h) = &self.headers {
+            if let Some(parent) = h.get("traceparent".into_header_name()) {
+                map.insert("traceparent", parent.as_str());
+            }
+            if let Some(parent) = h.get("tracestate".into_header_name()) {
+                map.insert("tracestate", parent.as_str());
+            }
+        };
+        map
+    }
+}
+
 /// A convenience function that will extract the current context from NATS message headers and set
 /// the parent span for the current tracing Span. If you want to do something more advanced, use the
 /// [`OtelHeaderExtractor`] type directly
-pub fn attach_span_context(msg: &crate::async_nats::Message) {
-    let header_map = OtelHeaderExtractor::new_from_message(msg);
+pub fn attach_span_context(msg: impl HasHeaderMap) {
+    let header_map = msg.header_map();
+    let headers = OtelHeaderExtractor::new(&header_map);
     let ctx_propagator = TraceContextPropagator::new();
-    let parent_ctx = ctx_propagator.extract(&header_map);
+    let parent_ctx = ctx_propagator.extract(&headers);
     Span::current().set_parent(parent_ctx);
 }
