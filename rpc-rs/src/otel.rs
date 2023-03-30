@@ -14,6 +14,9 @@ lazy_static::lazy_static! {
     static ref EMPTY_HEADERS: HeaderMap = HeaderMap::default();
 }
 
+pub const HEADER_TRACEPARENT: &str = "traceparent";
+pub const HEADER_TRACESTATE: &str = "tracestate";
+
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Extractor`] trait
 #[derive(Debug)]
 pub struct OtelHeaderExtractor<'a> {
@@ -115,9 +118,17 @@ impl From<OtelHeaderInjector> for HeaderMap {
 /// A convenience function that will extract the current context from NATS message headers and set
 /// the parent span for the current tracing Span. If you want to do something more advanced, use the
 /// [`OtelHeaderExtractor`] type directly
-pub fn attach_span_context(msg: &crate::async_nats::Message) {
-    let header_map = OtelHeaderExtractor::new_from_message(msg);
+pub fn attach_span_context(traceparent: &Option<&str>, tracestate: &Option<&str>) {
+    let mut header_map = HeaderMap::new();
+    if let Some(p) = traceparent {
+        header_map.insert(HEADER_TRACEPARENT, *p);
+    }
+    if let Some(p) = tracestate {
+        header_map.insert(HEADER_TRACESTATE, *p);
+    }
+
+    let extractor = OtelHeaderExtractor::new(&header_map);
     let ctx_propagator = TraceContextPropagator::new();
-    let parent_ctx = ctx_propagator.extract(&header_map);
+    let parent_ctx = ctx_propagator.extract(&extractor);
     Span::current().set_parent(parent_ctx);
 }

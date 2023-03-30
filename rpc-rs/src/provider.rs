@@ -404,7 +404,10 @@ impl HostBridge {
                         );
                         tokio::spawn( async move {
                             #[cfg(feature = "otel")]
-                            crate::otel::attach_span_context(&msg);
+                            crate::otel::attach_span_context(
+                                &msg.headers.as_ref().and_then(|h| h.get(crate::otel::HEADER_TRACEPARENT)).map(|v| v.as_str()),
+                                &msg.headers.as_ref().and_then(|h| h.get(crate::otel::HEADER_TRACESTATE)).map(|v| v.as_str()),
+                            );
                             match crate::common::deserialize::<Invocation>(&msg.payload) {
                                 Ok(inv) => {
                                     let current = tracing::Span::current();
