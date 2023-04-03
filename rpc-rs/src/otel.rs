@@ -12,6 +12,7 @@ use opentelemetry::{
 use std::collections::HashMap;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use std::str::FromStr;
 
 lazy_static::lazy_static! {
     static ref EMPTY_HEADERS: HeaderMap = HeaderMap::default();
@@ -52,14 +53,41 @@ impl<'a> AsRef<HashMap<&'a str, &'a str>> for OtelHeaderExtractor<'a> {
 
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Injector`] trait
 #[derive(Debug, Default)]
-pub struct OtelHeaderInjector {
-    inner: HeaderMap,
+pub struct OtelHeaderInjector<'a> {
+    inner: HashMap<&'a str, &'a str>,
 }
 
-impl OtelHeaderInjector {
+// impl Into<OtelHeaderInjector> for HeaderMap {
+//     fn into(obj: HeaderMap) -> HashMap<String, String> {
+//         HashMap::new()
+//             // if let Some(h) = obj.headers {
+//             //     HashMap::from(
+//             //         h.iter()
+//             //             .map(|(k, _)| std::str::from_utf8(k.as_ref()).unwrap_or_default())
+//             //             .collect()
+//             //     )
+//             // }
+//     }
+// }
+
+impl From<OtelHeaderInjector<'_>> for HeaderMap {
+    fn from(OtelHeaderInjector { inner }: OtelHeaderInjector) -> HeaderMap {
+        let mut headers = async_nats::HeaderMap::new();
+        for (k,v) in inner.iter() {
+            if let Ok(key) = async_nats::HeaderName::from_str(*k) {
+                headers.insert(key,async_nats::HeaderValue::from(*v));
+            }
+        }
+        headers
+    }
+}
+
+impl<'a> OtelHeaderInjector<'a> {
     /// Creates a new injector using the given [`HeaderMap`]
     pub fn new(headers: HeaderMap) -> Self {
-        OtelHeaderInjector { inner: headers }
+            OtelHeaderInjector {
+                inner: HashMap::new()
+            }
     }
 
     /// Convenience constructor that returns a new injector with the current span context already
@@ -85,25 +113,25 @@ impl OtelHeaderInjector {
     }
 }
 
-impl Injector for OtelHeaderInjector {
+impl Injector for OtelHeaderInjector<'_> {
     fn set(&mut self, key: &str, value: String) {
         self.inner.insert(key, value.as_ref());
     }
 }
 
-impl AsRef<HeaderMap> for OtelHeaderInjector {
-    fn as_ref(&self) -> &HeaderMap {
+impl<'a, 'b> AsRef<HashMap<&'b str, &'b str>> for OtelHeaderInjector<'b> {
+    fn as_ref(&self) -> &HashMap<&'b str, &'b str> {
         &self.inner
     }
 }
 
-impl From<HeaderMap> for OtelHeaderInjector {
+impl From<HeaderMap> for OtelHeaderInjector<'_> {
     fn from(headers: HeaderMap) -> Self {
         OtelHeaderInjector::new(headers)
     }
 }
 
-impl From<OtelHeaderInjector> for HeaderMap {
+impl From<OtelHeaderInjector<'_>> for HashMap<&str, &str> {
     fn from(inj: OtelHeaderInjector) -> Self {
         inj.inner
     }
