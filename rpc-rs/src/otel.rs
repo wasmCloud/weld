@@ -23,6 +23,27 @@ pub struct OtelHeaderExtractor<'a> {
     inner: &'a HeaderMap,
 }
 
+/// A type to hold the raw data appended to a span
+/// to avoid leaking reliance on a specific version of async_nats
+struct RawDataExtractor<'a> {
+    traceparent: &'a Option<&'a str>,
+    tracestate: &'a Option<&'a str>,
+}
+
+impl<'a> Extractor for RawDataExtractor<'a> {
+    fn get(&self, key: &str) -> Option<&str> {
+        match key {
+            HEADER_TRACEPARENT => *self.traceparent,
+            HEADER_TRACESTATE => *self.tracestate,
+            _ => None
+        }
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        vec![HEADER_TRACEPARENT, HEADER_TRACESTATE]
+    }
+}
+
 impl<'a> OtelHeaderExtractor<'a> {
     /// Creates a new extractor using the given [`HeaderMap`]
     pub fn new(headers: &'a HeaderMap) -> Self {
@@ -115,20 +136,12 @@ impl From<OtelHeaderInjector> for HeaderMap {
     }
 }
 
-/// A convenience function that will extract the current context from NATS message headers and set
-/// the parent span for the current tracing Span. If you want to do something more advanced, use the
+/// A convenience function that will accept raw values tracking parent and state
+/// for the current tracing Span. If you want to do something more advanced, use the
 /// [`OtelHeaderExtractor`] type directly
 pub fn attach_span_context(traceparent: &Option<&str>, tracestate: &Option<&str>) {
-    let mut header_map = HeaderMap::new();
-    if let Some(p) = traceparent {
-        header_map.insert(HEADER_TRACEPARENT, *p);
-    }
-    if let Some(p) = tracestate {
-        header_map.insert(HEADER_TRACESTATE, *p);
-    }
-
-    let extractor = OtelHeaderExtractor::new(&header_map);
     let ctx_propagator = TraceContextPropagator::new();
+    let extractor = RawDataExtractor { traceparent, tracestate };
     let parent_ctx = ctx_propagator.extract(&extractor);
     Span::current().set_parent(parent_ctx);
 }
